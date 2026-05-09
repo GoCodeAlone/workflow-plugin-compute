@@ -41,6 +41,27 @@ func (p *computePlugin) CreateModule(typeName, name string, config map[string]an
 	}
 }
 
+func (p *computePlugin) StepTypes() []string {
+	return []string{
+		"step.compute_dispatch",
+		"step.compute_wait",
+		"step.compute_map",
+	}
+}
+
+func (p *computePlugin) CreateStep(typeName, name string, config map[string]any) (sdk.StepInstance, error) {
+	switch typeName {
+	case "step.compute_dispatch":
+		return newDispatchStep(name, config)
+	case "step.compute_wait":
+		return newWaitStep(name, config)
+	case "step.compute_map":
+		return newMapStep(name, config)
+	default:
+		return nil, fmt.Errorf("compute plugin: unknown step type %q", typeName)
+	}
+}
+
 func (p *computePlugin) ModuleSchemas() []sdk.ModuleSchemaData {
 	return []sdk.ModuleSchemaData{
 		providerModuleSchema(),

@@ -40,7 +40,7 @@ V5: local wfctl build/test commands run with `GOWORK=off` while repo is outside 
 id|status|task|cites
 T1|x|repo skeleton: AGENTS, README, SPEC, plugin manifest, SDK entrypoint|C1,C2,I.repo,I.cmd,V1
 T2|x|implement `compute.provider` + `compute.pool` strict schemas|I.module,V2,V3
-T3|.|implement `step.compute_dispatch` strict schema + API client|I.step,V2,V3,V4
+T3|x|implement `step.compute_dispatch` strict schema + API client|I.step,V2,V3,V4
 T4|.|implement `step.compute_wait` polling/proof output|I.step,V4
 T5|.|implement `step.compute_map` fanout submit/wait behavior|I.step,V4
 
