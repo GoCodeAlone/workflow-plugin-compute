@@ -12,7 +12,7 @@
   "repository": "https://github.com/GoCodeAlone/workflow-plugin-compute",
   "capabilities": {
     "configProvider": false,
-    "moduleTypes": [],
+    "moduleTypes": ["compute.provider", "compute.pool"],
     "stepTypes": [],
     "triggerTypes": []
   }
