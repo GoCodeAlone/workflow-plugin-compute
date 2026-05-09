@@ -4,7 +4,10 @@ go 1.26.0
 
 toolchain go1.26.2
 
-require github.com/GoCodeAlone/workflow v0.27.0
+require (
+	github.com/GoCodeAlone/workflow v0.27.0
+	github.com/GoCodeAlone/workflow-compute v0.0.0-20260509213854-e62dca3c1662
+)
 
 require (
 	cel.dev/expr v0.25.1 // indirect

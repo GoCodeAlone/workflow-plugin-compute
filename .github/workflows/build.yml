@@ -19,6 +19,12 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      - name: Configure private Go modules
+        env:
+          RELEASES_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+        run: |
+          git config --global url."https://x-access-token:${RELEASES_TOKEN}@github.com/GoCodeAlone/".insteadOf "https://github.com/GoCodeAlone/"
+          go env -w GOPRIVATE=github.com/GoCodeAlone/*
       - name: Install wfctl
         run: |
           curl -fsSL -o wfctl https://github.com/GoCodeAlone/workflow/releases/download/v0.27.0/wfctl-linux-amd64
