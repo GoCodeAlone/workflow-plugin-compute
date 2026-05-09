@@ -8,8 +8,6 @@ import (
 	"net/http"
 	"net/url"
 	"time"
-
-	"github.com/GoCodeAlone/workflow-compute/pkg/protocol"
 )
 
 type computeClient struct {
@@ -33,20 +31,20 @@ func newComputeClient(serverURL, token string, timeout time.Duration) (*computeC
 	}, nil
 }
 
-func (c *computeClient) submitTask(ctx context.Context, task protocol.Task) (protocol.Task, error) {
+func (c *computeClient) submitTask(ctx context.Context, task computeTask) (computeTask, error) {
 	var out struct {
-		Task protocol.Task `json:"task"`
+		Task computeTask `json:"task"`
 	}
 	if err := c.doJSON(ctx, http.MethodPost, "/v1/tasks", task, http.StatusCreated, &out); err != nil {
-		return protocol.Task{}, err
+		return computeTask{}, err
 	}
 	return out.Task, nil
 }
 
-func (c *computeClient) listTasks(ctx context.Context) ([]protocol.Task, error) {
+func (c *computeClient) listTasks(ctx context.Context) ([]computeTask, error) {
 	var out struct {
-		Tasks  []protocol.Task `json:"tasks"`
-		Stalls []any           `json:"stalls,omitempty"`
+		Tasks  []computeTask `json:"tasks"`
+		Stalls []any         `json:"stalls,omitempty"`
 	}
 	if err := c.doJSON(ctx, http.MethodGet, "/v1/tasks", nil, http.StatusOK, &out); err != nil {
 		return nil, err
@@ -87,5 +85,5 @@ func (c *computeClient) doJSON(ctx context.Context, method, path string, body an
 	if out == nil {
 		return nil
 	}
-	return protocol.DecodeStrict(resp.Body, out)
+	return decodeStrictJSON(resp.Body, out)
 }

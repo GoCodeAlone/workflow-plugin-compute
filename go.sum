@@ -48,8 +48,6 @@ github.com/GoCodeAlone/modular/modules/eventbus/v2 v2.8.0 h1:buYs0TGNbAZgtTq1Qb+
 github.com/GoCodeAlone/modular/modules/eventbus/v2 v2.8.0/go.mod h1:329flAKmwrPq2JEwu9iltWv6A83H/Di82Xze+kvdKDw=
 github.com/GoCodeAlone/workflow v0.27.0 h1:oufPjwWTuwbZw5PckBEDrIah+w7JJcj51nKQzLe5io0=
 github.com/GoCodeAlone/workflow v0.27.0/go.mod h1:Ue+5YDScTZgtA36q6r/kDaIRxGJFkyxXbeyJVNVJ0Cc=
-github.com/GoCodeAlone/workflow-compute v0.0.0-20260509213107-57ef971934c4 h1:UfgIrPyYmKz/b7S4WQzUGnVzvbgavzfI0y/Mr8QDvn4=
-github.com/GoCodeAlone/workflow-compute v0.0.0-20260509213107-57ef971934c4/go.mod h1:Loml3Kueb3XI4Nh+CIPR55dUlLXkd/bnfsE3rf/WVlw=
 github.com/GoCodeAlone/yaegi v0.17.2 h1:WK6Y6e0t1a6U7r+S2dN3CGWW1PizYD3zO0zneToZPxM=
 github.com/GoCodeAlone/yaegi v0.17.2/go.mod h1:z5Pr6Wse6QJcQvpgxTxzMAevFarH0N37TG88Y9dprx0=
 github.com/GoogleCloudPlatform/opentelemetry-operations-go/detectors/gcp v1.32.0 h1:rIkQfkCOVKc1OiRCNcSDD8ml5RJlZbH/Xsq7lbpynwc=

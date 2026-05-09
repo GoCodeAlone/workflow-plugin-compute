@@ -6,8 +6,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
-
-	"github.com/GoCodeAlone/workflow-compute/pkg/protocol"
 )
 
 func TestStepTypes(t *testing.T) {
@@ -19,7 +17,7 @@ func TestStepTypes(t *testing.T) {
 }
 
 func TestDispatchStepSubmitsTask(t *testing.T) {
-	var got protocol.Task
+	var got computeTask
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.URL.Path != "/v1/tasks" {
 			t.Fatalf("request: %s %s", r.Method, r.URL.Path)
@@ -46,7 +44,7 @@ func TestDispatchStepSubmitsTask(t *testing.T) {
 	if result.StopPipeline {
 		t.Fatalf("unexpected stop: %+v", result.Output)
 	}
-	if got.OrgID != "org-1" || got.Workload.Kind != protocol.WorkloadCommand {
+	if got.OrgID != "org-1" || got.Workload.Kind != "command" {
 		t.Fatalf("task: got %+v", got)
 	}
 	if got.Signature.Verified || got.Signature.Value == "" {
@@ -70,11 +68,11 @@ func TestWaitStepReadsTaskStatus(t *testing.T) {
 		if r.Method != http.MethodGet || r.URL.Path != "/v1/tasks" {
 			t.Fatalf("request: %s %s", r.Method, r.URL.Path)
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"tasks": []protocol.Task{{
+		_ = json.NewEncoder(w).Encode(map[string]any{"tasks": []computeTask{{
 			ID:     "task-1",
 			OrgID:  "org-1",
 			PoolID: "pool-1",
-			Status: protocol.TaskSucceeded,
+			Status: "succeeded",
 		}}, "stalls": []any{}})
 	}))
 	defer srv.Close()
@@ -91,7 +89,7 @@ func TestWaitStepReadsTaskStatus(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	if result.Output["status"] != string(protocol.TaskSucceeded) {
+	if result.Output["status"] != "succeeded" {
 		t.Fatalf("output: got %+v", result.Output)
 	}
 }
@@ -100,7 +98,7 @@ func TestMapStepSubmitsEachTask(t *testing.T) {
 	var count int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		count++
-		var task protocol.Task
+		var task computeTask
 		if err := json.NewDecoder(r.Body).Decode(&task); err != nil {
 			t.Fatalf("decode task: %v", err)
 		}

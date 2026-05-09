@@ -34,6 +34,7 @@ V2: plugin-owned config decode rejects unknown fields
 V3: plugin passes secret/config refs through; raw secret values are not logged
 V4: step outputs include task/proof ids and statuses, not full secret-bearing payloads
 V5: local wfctl build/test commands run with `GOWORK=off` while repo is outside workspace `go.work`
+V6: plugin CI does not require private cross-repo Go module credentials for core compute
 
 §T
 
@@ -48,3 +49,4 @@ T5|.|implement `step.compute_map` fanout submit/wait behavior|I.step,V4
 
 id|date|cause|fix
 B1|2026-05-09|local `wfctl build` inherited parent `go.work` that excludes new module|C7,V5
+B2|2026-05-09|CI could not fetch private `workflow-compute` Go module from plugin repo|V6

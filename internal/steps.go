@@ -4,10 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
-
-	"github.com/GoCodeAlone/workflow-compute/pkg/protocol"
 	sdk "github.com/GoCodeAlone/workflow/plugin/external/sdk"
+	"time"
 )
 
 type connectionConfig struct {
@@ -79,7 +77,7 @@ func (c taskConfig) validate() error {
 type dispatchConfig struct {
 	connectionConfig
 	taskConfig
-	Workload protocol.WorkloadSpec `json:"workload"`
+	Workload workloadSpec `json:"workload"`
 }
 
 type dispatchStep struct {
@@ -158,7 +156,7 @@ type mapConfig struct {
 
 type mapTaskConfig struct {
 	taskConfig
-	Workload protocol.WorkloadSpec `json:"workload"`
+	Workload workloadSpec `json:"workload"`
 }
 
 type mapStep struct {
@@ -201,7 +199,7 @@ func (s *mapStep) Execute(ctx context.Context, _ map[string]any, _ map[string]ma
 	return &sdk.StepResult{Output: map[string]any{"tasks": outputs}}, nil
 }
 
-func taskOutput(task protocol.Task) map[string]any {
+func taskOutput(task computeTask) map[string]any {
 	return map[string]any{
 		"task_id": task.ID,
 		"org_id":  task.OrgID,
