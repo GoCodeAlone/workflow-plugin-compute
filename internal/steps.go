@@ -303,6 +303,9 @@ func (s *mapStep) Execute(ctx context.Context, _ map[string]any, _ map[string]ma
 	for {
 		outputs, done, err := s.mapSnapshot(waitCtx, client, submitted)
 		if err != nil {
+			if errors.Is(err, context.DeadlineExceeded) {
+				return mapErrorResult(outputs, mapTimeoutError(len(submitted))), nil
+			}
 			return mapErrorResult(outputs, err.Error()), nil
 		}
 		if done {
@@ -313,7 +316,7 @@ func (s *mapStep) Execute(ctx context.Context, _ map[string]any, _ map[string]ma
 		select {
 		case <-waitCtx.Done():
 			timer.Stop()
-			return mapErrorResult(outputs, fmt.Sprintf("timed out waiting for %d compute tasks", len(submitted))), nil
+			return mapErrorResult(outputs, mapTimeoutError(len(submitted))), nil
 		case <-timer.C:
 		}
 	}
@@ -474,4 +477,8 @@ func mapErrorResult(tasks []map[string]any, msg string) *sdk.StepResult {
 			"tasks": tasks,
 		},
 	}
+}
+
+func mapTimeoutError(taskCount int) string {
+	return fmt.Sprintf("timed out waiting for %d compute tasks", taskCount)
 }

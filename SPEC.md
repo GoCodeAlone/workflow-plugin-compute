@@ -37,6 +37,7 @@ V5: local wfctl build/test commands run with `GOWORK=off` while repo is outside 
 V6: plugin CI uses `RELEASES_TOKEN` + `GOPRIVATE` before fetching private GoCodeAlone modules
 V7: `step.compute_wait` stops on task failure/stall using task API state; proof API outage cannot mask failed/stalled task status
 V8: `step.compute_wait` proof success requires verifier status `accepted`; rejected/unknown proof metadata never satisfies required proof
+V9: `step.compute_map` timeout output is deterministic even if context expires during an HTTP poll
 
 §T
 
@@ -45,7 +46,7 @@ T1|x|repo skeleton: AGENTS, README, SPEC, plugin manifest, SDK entrypoint|C1,C2,
 T2|x|implement `compute.provider` + `compute.pool` strict schemas|I.module,V2,V3
 T3|x|implement `step.compute_dispatch` strict schema + API client|I.step,V2,V3,V4
 T4|x|implement `step.compute_wait` polling/proof output|I.step,V4
-T5|x|implement `step.compute_map` fanout submit/wait behavior|I.step,V4
+T5|x|implement `step.compute_map` fanout submit/wait behavior|I.step,V4,V9
 
 §B
 
@@ -54,3 +55,4 @@ B1|2026-05-09|local `wfctl build` inherited parent `go.work` that excludes new m
 B2|2026-05-09|CI could not fetch private `workflow-compute` Go module until private module auth was wired|V6
 B3|2026-05-09|review found wait-step failed tasks depended on proof API and discarded task stall flags|V7
 B4|2026-05-09|review found wait-step accepted any proof receipt status as satisfying proof|V8
+B5|2026-05-09|CI exposed `compute_map` timeout test receiving raw context-deadline transport error|V9
