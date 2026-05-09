@@ -45,7 +45,7 @@ T1|x|repo skeleton: AGENTS, README, SPEC, plugin manifest, SDK entrypoint|C1,C2,
 T2|x|implement `compute.provider` + `compute.pool` strict schemas|I.module,V2,V3
 T3|x|implement `step.compute_dispatch` strict schema + API client|I.step,V2,V3,V4
 T4|x|implement `step.compute_wait` polling/proof output|I.step,V4
-T5|.|implement `step.compute_map` fanout submit/wait behavior|I.step,V4
+T5|x|implement `step.compute_map` fanout submit/wait behavior|I.step,V4
 
 §B
 

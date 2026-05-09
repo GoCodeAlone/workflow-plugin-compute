@@ -213,7 +213,11 @@ func (c waitConfig) requireProof() bool {
 }
 
 func (c waitConfig) actionableStalls(stalls []taskStall) []taskStall {
-	if c.requireProof() {
+	return actionableStalls(stalls, c.requireProof())
+}
+
+func actionableStalls(stalls []taskStall, requireProof bool) []taskStall {
+	if requireProof {
 		return stalls
 	}
 	actionable := make([]taskStall, 0, len(stalls))
@@ -228,7 +232,10 @@ func (c waitConfig) actionableStalls(stalls []taskStall) []taskStall {
 
 type mapConfig struct {
 	connectionConfig
-	Tasks []mapTaskConfig `json:"tasks"`
+	Tasks        []mapTaskConfig `json:"tasks"`
+	PollInterval string          `json:"poll_interval,omitempty"`
+	Timeout      string          `json:"timeout,omitempty"`
+	RequireProof *bool           `json:"require_proof,omitempty"`
 }
 
 type mapTaskConfig struct {
@@ -252,6 +259,20 @@ func newMapStep(name string, raw map[string]any) (*mapStep, error) {
 	if len(cfg.Tasks) == 0 {
 		return nil, fmt.Errorf("step.compute_map %q: tasks is required", name)
 	}
+	if cfg.PollInterval != "" {
+		if d, err := time.ParseDuration(cfg.PollInterval); err != nil {
+			return nil, fmt.Errorf("step.compute_map %q: poll_interval must be duration: %w", name, err)
+		} else if d <= 0 {
+			return nil, fmt.Errorf("step.compute_map %q: poll_interval must be positive", name)
+		}
+	}
+	if cfg.Timeout != "" {
+		if d, err := time.ParseDuration(cfg.Timeout); err != nil {
+			return nil, fmt.Errorf("step.compute_map %q: timeout must be duration: %w", name, err)
+		} else if d <= 0 {
+			return nil, fmt.Errorf("step.compute_map %q: timeout must be positive", name)
+		}
+	}
 	for i, task := range cfg.Tasks {
 		if err := task.taskConfig.validate(); err != nil {
 			return nil, fmt.Errorf("step.compute_map %q: tasks[%d]: %w", name, i, err)
@@ -265,15 +286,118 @@ func (s *mapStep) Execute(ctx context.Context, _ map[string]any, _ map[string]ma
 	if err != nil {
 		return errorResult(err.Error()), nil
 	}
-	outputs := make([]map[string]any, 0, len(s.config.Tasks))
+	submitted := make([]protocol.Task, 0, len(s.config.Tasks))
 	for _, cfg := range s.config.Tasks {
 		task, err := client.submitTask(ctx, buildTask(cfg.taskConfig, cfg.Workload))
 		if err != nil {
-			return errorResult(err.Error()), nil
+			return mapErrorResult(taskOutputs(submitted), err.Error()), nil
 		}
+		submitted = append(submitted, task)
+	}
+
+	pollInterval := durationOrDefault(s.config.PollInterval, time.Second)
+	timeout := durationOrDefault(s.config.Timeout, 5*time.Minute)
+	waitCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	for {
+		outputs, done, err := s.mapSnapshot(waitCtx, client, submitted)
+		if err != nil {
+			return mapErrorResult(outputs, err.Error()), nil
+		}
+		if done {
+			return &sdk.StepResult{Output: map[string]any{"tasks": outputs}}, nil
+		}
+
+		timer := time.NewTimer(pollInterval)
+		select {
+		case <-waitCtx.Done():
+			timer.Stop()
+			return mapErrorResult(outputs, fmt.Sprintf("timed out waiting for %d compute tasks", len(submitted))), nil
+		case <-timer.C:
+		}
+	}
+}
+
+func (s *mapStep) mapSnapshot(ctx context.Context, client *computeClient, submitted []protocol.Task) ([]map[string]any, bool, error) {
+	list, err := client.listTasks(ctx)
+	if err != nil {
+		return taskOutputs(submitted), false, err
+	}
+	tasksByID := make(map[string]protocol.Task, len(list.Tasks))
+	for _, task := range list.Tasks {
+		tasksByID[task.ID] = task
+	}
+	stallsByTask := make(map[string][]taskStall)
+	for _, stall := range list.Stalls {
+		stallsByTask[stall.TaskID] = append(stallsByTask[stall.TaskID], stall)
+	}
+
+	outputs := make([]map[string]any, 0, len(submitted))
+	allTerminal := true
+	for _, submittedTask := range submitted {
+		task, ok := tasksByID[submittedTask.ID]
+		if !ok {
+			outputs = append(outputs, taskOutput(submittedTask))
+			return outputs, false, fmt.Errorf("task %q not found", submittedTask.ID)
+		}
+		output := taskOutput(task)
+		actionableStalls := actionableStalls(stallsByTask[task.ID], s.config.requireProof())
+		if task.Status == protocol.TaskFailed || task.Status == protocol.TaskStalled || len(actionableStalls) > 0 {
+			if len(actionableStalls) > 0 {
+				addStallOutput(output, actionableStalls[0])
+			}
+			msg := taskWaitError(task, actionableStalls)
+			output["error"] = msg
+			outputs = append(outputs, output)
+			return outputs, false, errors.New(msg)
+		}
+		if !isTerminalTaskStatus(task.Status) {
+			allTerminal = false
+		}
+		outputs = append(outputs, output)
+	}
+	if !allTerminal {
+		return outputs, false, nil
+	}
+
+	proofs, err := client.listProofs(ctx)
+	if err != nil {
+		return outputs, false, err
+	}
+	proofsByTask := make(map[string]protocol.ProofReceipt, len(proofs))
+	for _, proof := range proofs {
+		proofsByTask[proof.TaskID] = proof
+	}
+	allProven := true
+	for i, submittedTask := range submitted {
+		proof, ok := proofsByTask[submittedTask.ID]
+		if !ok {
+			if s.config.requireProof() {
+				allProven = false
+			}
+			continue
+		}
+		addProofOutput(outputs[i], proof)
+		if proof.Verifier.Status != protocol.VerificationAccepted {
+			msg := fmt.Sprintf("task %q proof %q is %s", submittedTask.ID, proof.ID, proof.Verifier.Status)
+			outputs[i]["error"] = msg
+			return outputs, false, errors.New(msg)
+		}
+	}
+	return outputs, allProven, nil
+}
+
+func (c mapConfig) requireProof() bool {
+	return c.RequireProof == nil || *c.RequireProof
+}
+
+func taskOutputs(tasks []protocol.Task) []map[string]any {
+	outputs := make([]map[string]any, 0, len(tasks))
+	for _, task := range tasks {
 		outputs = append(outputs, taskOutput(task))
 	}
-	return &sdk.StepResult{Output: map[string]any{"tasks": outputs}}, nil
+	return outputs
 }
 
 func taskOutput(task protocol.Task) map[string]any {
@@ -338,6 +462,16 @@ func errorResult(msg string) *sdk.StepResult {
 		StopPipeline: true,
 		Output: map[string]any{
 			"error": msg,
+		},
+	}
+}
+
+func mapErrorResult(tasks []map[string]any, msg string) *sdk.StepResult {
+	return &sdk.StepResult{
+		StopPipeline: true,
+		Output: map[string]any{
+			"error": msg,
+			"tasks": tasks,
 		},
 	}
 }

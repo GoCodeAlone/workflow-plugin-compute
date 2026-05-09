@@ -268,16 +268,47 @@ func TestWaitStepRejectsNonAcceptedProofStatus(t *testing.T) {
 	}
 }
 
-func TestMapStepSubmitsEachTask(t *testing.T) {
-	var count int
+func TestMapStepSubmitsEachTaskAndWaits(t *testing.T) {
+	var submitCount int
+	var listCount int
+	var proofCount int
+	var submitted []protocol.Task
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		count++
-		var task protocol.Task
-		if err := json.NewDecoder(r.Body).Decode(&task); err != nil {
-			t.Fatalf("decode task: %v", err)
+		switch r.URL.Path {
+		case "/v1/tasks":
+			switch r.Method {
+			case http.MethodPost:
+				submitCount++
+				var task protocol.Task
+				if err := json.NewDecoder(r.Body).Decode(&task); err != nil {
+					t.Fatalf("decode task: %v", err)
+				}
+				submitted = append(submitted, task)
+				w.WriteHeader(http.StatusCreated)
+				_ = json.NewEncoder(w).Encode(map[string]any{"task": task})
+			case http.MethodGet:
+				listCount++
+				tasks := append([]protocol.Task(nil), submitted...)
+				for i := range tasks {
+					tasks[i].Status = protocol.TaskQueued
+					if listCount > 1 {
+						tasks[i].Status = protocol.TaskSucceeded
+					}
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{"tasks": tasks, "stalls": []any{}})
+			default:
+				t.Fatalf("method: %s", r.Method)
+			}
+		case "/v1/proofs":
+			proofCount++
+			proofs := make([]protocol.ProofReceipt, 0, len(submitted))
+			for _, task := range submitted {
+				proofs = append(proofs, proofReceipt(task.ID))
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"proofs": proofs})
+		default:
+			t.Fatalf("path: %s", r.URL.Path)
 		}
-		w.WriteHeader(http.StatusCreated)
-		_ = json.NewEncoder(w).Encode(map[string]any{"task": task})
 	}))
 	defer srv.Close()
 
@@ -288,6 +319,8 @@ func TestMapStepSubmitsEachTask(t *testing.T) {
 			taskConfigMap("task-1"),
 			taskConfigMap("task-2"),
 		},
+		"poll_interval": "1ms",
+		"timeout":       "100ms",
 	}
 	step, err := newMapStep("map", cfg)
 	if err != nil {
@@ -297,8 +330,350 @@ func TestMapStepSubmitsEachTask(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	if result.StopPipeline || count != 2 {
-		t.Fatalf("result=%+v count=%d", result, count)
+	if result.StopPipeline || submitCount != 2 || listCount < 2 || proofCount == 0 {
+		t.Fatalf("result=%+v submit=%d list=%d proofs=%d", result, submitCount, listCount, proofCount)
+	}
+	tasks, ok := result.Output["tasks"].([]map[string]any)
+	if !ok || len(tasks) != 2 {
+		t.Fatalf("tasks output: got %+v", result.Output)
+	}
+	if tasks[0]["proof_id"] != "proof-1" || tasks[1]["status"] != string(protocol.TaskSucceeded) {
+		t.Fatalf("task outputs: got %+v", tasks)
+	}
+}
+
+func TestMapStepRejectsUnknownConfig(t *testing.T) {
+	cfg := map[string]any{
+		"server_url":     "https://compute.example.test",
+		"auth_token_ref": "secret:compute-token",
+		"tasks":          []any{taskConfigMap("task-1")},
+		"unknown":        true,
+	}
+	if _, err := newMapStep("map", cfg); err == nil {
+		t.Fatal("expected strict unknown-field error")
+	}
+}
+
+func TestMapStepFailedTaskStopsPipeline(t *testing.T) {
+	var submitted []protocol.Task
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/tasks":
+			switch r.Method {
+			case http.MethodPost:
+				var task protocol.Task
+				if err := json.NewDecoder(r.Body).Decode(&task); err != nil {
+					t.Fatalf("decode task: %v", err)
+				}
+				submitted = append(submitted, task)
+				w.WriteHeader(http.StatusCreated)
+				_ = json.NewEncoder(w).Encode(map[string]any{"task": task})
+			case http.MethodGet:
+				tasks := append([]protocol.Task(nil), submitted...)
+				for i := range tasks {
+					tasks[i].Status = protocol.TaskSucceeded
+				}
+				tasks[0].Status = protocol.TaskFailed
+				_ = json.NewEncoder(w).Encode(map[string]any{"tasks": tasks, "stalls": []any{}})
+			default:
+				t.Fatalf("method: %s", r.Method)
+			}
+		case "/v1/proofs":
+			http.Error(w, "proofs should not be read for failed task", http.StatusInternalServerError)
+		default:
+			t.Fatalf("path: %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	step, err := newMapStep("map", map[string]any{
+		"server_url":     srv.URL,
+		"auth_token_ref": "secret:compute-token",
+		"tasks":          []any{taskConfigMap("task-1"), taskConfigMap("task-2")},
+		"poll_interval":  "1ms",
+		"timeout":        "100ms",
+	})
+	if err != nil {
+		t.Fatalf("newMapStep: %v", err)
+	}
+	result, err := step.Execute(context.Background(), nil, nil, nil, nil, runtimeSecrets())
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !result.StopPipeline {
+		t.Fatalf("failed task should stop pipeline, got %+v", result.Output)
+	}
+	tasks := result.Output["tasks"].([]map[string]any)
+	if tasks[0]["status"] != string(protocol.TaskFailed) {
+		t.Fatalf("failed task output: got %+v", result.Output)
+	}
+}
+
+func TestMapStepRejectsNonAcceptedProofStatus(t *testing.T) {
+	var submitted []protocol.Task
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/tasks":
+			switch r.Method {
+			case http.MethodPost:
+				var task protocol.Task
+				if err := json.NewDecoder(r.Body).Decode(&task); err != nil {
+					t.Fatalf("decode task: %v", err)
+				}
+				submitted = append(submitted, task)
+				w.WriteHeader(http.StatusCreated)
+				_ = json.NewEncoder(w).Encode(map[string]any{"task": task})
+			case http.MethodGet:
+				tasks := append([]protocol.Task(nil), submitted...)
+				for i := range tasks {
+					tasks[i].Status = protocol.TaskSucceeded
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{"tasks": tasks, "stalls": []any{}})
+			default:
+				t.Fatalf("method: %s", r.Method)
+			}
+		case "/v1/proofs":
+			proofs := make([]protocol.ProofReceipt, 0, len(submitted))
+			for i, task := range submitted {
+				proof := proofReceipt(task.ID)
+				if i == 1 {
+					proof.Verifier.Status = protocol.VerificationRejected
+				}
+				proofs = append(proofs, proof)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"proofs": proofs})
+		default:
+			t.Fatalf("path: %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	step, err := newMapStep("map", map[string]any{
+		"server_url":     srv.URL,
+		"auth_token_ref": "secret:compute-token",
+		"tasks":          []any{taskConfigMap("task-1"), taskConfigMap("task-2")},
+	})
+	if err != nil {
+		t.Fatalf("newMapStep: %v", err)
+	}
+	result, err := step.Execute(context.Background(), nil, nil, nil, nil, runtimeSecrets())
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !result.StopPipeline {
+		t.Fatalf("rejected proof should stop pipeline, got %+v", result.Output)
+	}
+	tasks := result.Output["tasks"].([]map[string]any)
+	if tasks[1]["proof_status"] != string(protocol.VerificationRejected) {
+		t.Fatalf("rejected proof output: got %+v", result.Output)
+	}
+}
+
+func TestMapStepWaitsForRequiredProof(t *testing.T) {
+	var submitted []protocol.Task
+	var proofCalls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/tasks":
+			switch r.Method {
+			case http.MethodPost:
+				var task protocol.Task
+				if err := json.NewDecoder(r.Body).Decode(&task); err != nil {
+					t.Fatalf("decode task: %v", err)
+				}
+				submitted = append(submitted, task)
+				w.WriteHeader(http.StatusCreated)
+				_ = json.NewEncoder(w).Encode(map[string]any{"task": task})
+			case http.MethodGet:
+				tasks := append([]protocol.Task(nil), submitted...)
+				for i := range tasks {
+					tasks[i].Status = protocol.TaskSucceeded
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{"tasks": tasks, "stalls": []any{}})
+			default:
+				t.Fatalf("method: %s", r.Method)
+			}
+		case "/v1/proofs":
+			proofCalls++
+			proofs := []protocol.ProofReceipt{}
+			if proofCalls > 1 {
+				for _, task := range submitted {
+					proofs = append(proofs, proofReceipt(task.ID))
+				}
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"proofs": proofs})
+		default:
+			t.Fatalf("path: %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	step, err := newMapStep("map", map[string]any{
+		"server_url":     srv.URL,
+		"auth_token_ref": "secret:compute-token",
+		"tasks":          []any{taskConfigMap("task-1")},
+		"poll_interval":  "1ms",
+		"timeout":        "100ms",
+	})
+	if err != nil {
+		t.Fatalf("newMapStep: %v", err)
+	}
+	result, err := step.Execute(context.Background(), nil, nil, nil, nil, runtimeSecrets())
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if result.StopPipeline || proofCalls < 2 {
+		t.Fatalf("map should wait for delayed proof, result=%+v proofCalls=%d", result.Output, proofCalls)
+	}
+	tasks := result.Output["tasks"].([]map[string]any)
+	if tasks[0]["proof_id"] != "proof-1" {
+		t.Fatalf("delayed proof output: got %+v", result.Output)
+	}
+}
+
+func TestMapStepMissingTaskStopsPipeline(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/tasks":
+			switch r.Method {
+			case http.MethodPost:
+				var task protocol.Task
+				if err := json.NewDecoder(r.Body).Decode(&task); err != nil {
+					t.Fatalf("decode task: %v", err)
+				}
+				w.WriteHeader(http.StatusCreated)
+				_ = json.NewEncoder(w).Encode(map[string]any{"task": task})
+			case http.MethodGet:
+				_ = json.NewEncoder(w).Encode(map[string]any{"tasks": []protocol.Task{}, "stalls": []any{}})
+			default:
+				t.Fatalf("method: %s", r.Method)
+			}
+		default:
+			t.Fatalf("path: %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	step, err := newMapStep("map", map[string]any{
+		"server_url":     srv.URL,
+		"auth_token_ref": "secret:compute-token",
+		"tasks":          []any{taskConfigMap("task-1")},
+	})
+	if err != nil {
+		t.Fatalf("newMapStep: %v", err)
+	}
+	result, err := step.Execute(context.Background(), nil, nil, nil, nil, runtimeSecrets())
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !result.StopPipeline || result.Output["error"] != `task "task-1" not found` {
+		t.Fatalf("missing task should stop pipeline, got %+v", result.Output)
+	}
+}
+
+func TestMapStepStallStopsPipelineWithMetadata(t *testing.T) {
+	var submitted []protocol.Task
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/tasks":
+			switch r.Method {
+			case http.MethodPost:
+				var task protocol.Task
+				if err := json.NewDecoder(r.Body).Decode(&task); err != nil {
+					t.Fatalf("decode task: %v", err)
+				}
+				submitted = append(submitted, task)
+				w.WriteHeader(http.StatusCreated)
+				_ = json.NewEncoder(w).Encode(map[string]any{"task": task})
+			case http.MethodGet:
+				tasks := append([]protocol.Task(nil), submitted...)
+				for i := range tasks {
+					tasks[i].Status = protocol.TaskQueued
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{"tasks": tasks, "stalls": []taskStall{{
+					TaskID:  "task-1",
+					LeaseID: "lease-1",
+					AgentID: "agent-1",
+					Reason:  "queued_sla_exceeded",
+					AgeMS:   120000,
+				}}})
+			default:
+				t.Fatalf("method: %s", r.Method)
+			}
+		case "/v1/proofs":
+			http.Error(w, "proofs should not be read for stalled task", http.StatusInternalServerError)
+		default:
+			t.Fatalf("path: %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	step, err := newMapStep("map", map[string]any{
+		"server_url":     srv.URL,
+		"auth_token_ref": "secret:compute-token",
+		"tasks":          []any{taskConfigMap("task-1")},
+	})
+	if err != nil {
+		t.Fatalf("newMapStep: %v", err)
+	}
+	result, err := step.Execute(context.Background(), nil, nil, nil, nil, runtimeSecrets())
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !result.StopPipeline {
+		t.Fatalf("stall should stop pipeline, got %+v", result.Output)
+	}
+	tasks := result.Output["tasks"].([]map[string]any)
+	if tasks[0]["stall_reason"] != "queued_sla_exceeded" || tasks[0]["lease_id"] != "lease-1" {
+		t.Fatalf("stall output: got %+v", result.Output)
+	}
+}
+
+func TestMapStepTimeoutStopsPipeline(t *testing.T) {
+	var submitted []protocol.Task
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/tasks":
+			switch r.Method {
+			case http.MethodPost:
+				var task protocol.Task
+				if err := json.NewDecoder(r.Body).Decode(&task); err != nil {
+					t.Fatalf("decode task: %v", err)
+				}
+				submitted = append(submitted, task)
+				w.WriteHeader(http.StatusCreated)
+				_ = json.NewEncoder(w).Encode(map[string]any{"task": task})
+			case http.MethodGet:
+				tasks := append([]protocol.Task(nil), submitted...)
+				for i := range tasks {
+					tasks[i].Status = protocol.TaskQueued
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{"tasks": tasks, "stalls": []any{}})
+			default:
+				t.Fatalf("method: %s", r.Method)
+			}
+		default:
+			t.Fatalf("path: %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	step, err := newMapStep("map", map[string]any{
+		"server_url":     srv.URL,
+		"auth_token_ref": "secret:compute-token",
+		"tasks":          []any{taskConfigMap("task-1")},
+		"poll_interval":  "1ms",
+		"timeout":        "5ms",
+	})
+	if err != nil {
+		t.Fatalf("newMapStep: %v", err)
+	}
+	result, err := step.Execute(context.Background(), nil, nil, nil, nil, runtimeSecrets())
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !result.StopPipeline || result.Output["error"] != "timed out waiting for 1 compute tasks" {
+		t.Fatalf("timeout should stop pipeline, got %+v", result.Output)
 	}
 }
 
