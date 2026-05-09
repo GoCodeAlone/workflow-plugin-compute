@@ -1,0 +1,14 @@
+ci:
+  build:
+    targets:
+      - name: workflow-plugin-compute
+        type: go
+        path: ./cmd/workflow-plugin-compute
+        config:
+          ldflags: "-s -w"
+  test:
+    unit:
+      command: GOWORK=off go test ./...
+      coverage: true
+
+modules: []

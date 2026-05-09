@@ -1,0 +1,41 @@
+version: 2
+
+project_name: workflow-plugin-compute
+
+before:
+  hooks:
+    - go mod tidy
+    - "sed -i.bak 's/\"version\": \".*\"/\"version\": \"{{ .Version }}\"/' plugin.json && rm -f plugin.json.bak"
+
+builds:
+  - id: workflow-plugin-compute
+    main: ./cmd/workflow-plugin-compute
+    binary: workflow-plugin-compute
+    env:
+      - CGO_ENABLED=0
+      - GOPRIVATE=github.com/GoCodeAlone/*
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X github.com/GoCodeAlone/workflow-plugin-compute/internal.Version={{.Version}}
+
+archives:
+  - id: workflow-plugin-compute
+    builds:
+      - workflow-plugin-compute
+    name_template: "{{ .ProjectName }}-{{ .Os }}-{{ .Arch }}"
+    files:
+      - plugin.json
+
+checksum:
+  name_template: "checksums.txt"
+
+release:
+  github:
+    owner: GoCodeAlone
+    name: workflow-plugin-compute

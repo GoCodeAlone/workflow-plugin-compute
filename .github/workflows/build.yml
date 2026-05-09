@@ -1,0 +1,32 @@
+name: Build
+on:
+  push:
+    branches:
+      - master
+      - main
+  pull_request:
+    branches:
+      - master
+      - main
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Install wfctl
+        run: |
+          curl -fsSL -o wfctl https://github.com/GoCodeAlone/workflow/releases/download/v0.27.0/wfctl-linux-amd64
+          chmod +x wfctl
+          sudo mv wfctl /usr/local/bin/wfctl
+      - name: Test
+        run: GOWORK=off go test ./...
+      - name: Validate workflow config
+        run: wfctl validate workflow.yaml
+      - name: Build with wfctl
+        run: wfctl build --config workflow.yaml --no-push --tag ci

@@ -1,0 +1,19 @@
+{
+  "name": "workflow-plugin-compute",
+  "version": "0.1.0",
+  "description": "Workflow adapter for workflow-compute dispatch, wait, map, provider, and pool integration",
+  "author": "GoCodeAlone",
+  "license": "MIT",
+  "type": "external",
+  "tier": "compute",
+  "minEngineVersion": "0.27.0",
+  "keywords": ["workflow", "compute", "distributed-compute", "ci", "proof-of-work"],
+  "homepage": "https://github.com/GoCodeAlone/workflow-plugin-compute",
+  "repository": "https://github.com/GoCodeAlone/workflow-plugin-compute",
+  "capabilities": {
+    "configProvider": false,
+    "moduleTypes": [],
+    "stepTypes": [],
+    "triggerTypes": []
+  }
+}
