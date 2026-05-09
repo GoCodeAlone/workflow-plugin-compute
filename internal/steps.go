@@ -112,7 +112,10 @@ func (s *dispatchStep) Execute(ctx context.Context, _ map[string]any, _ map[stri
 
 type waitConfig struct {
 	connectionConfig
-	TaskID string `json:"task_id"`
+	TaskID       string `json:"task_id"`
+	PollInterval string `json:"poll_interval,omitempty"`
+	Timeout      string `json:"timeout,omitempty"`
+	RequireProof *bool  `json:"require_proof,omitempty"`
 }
 
 type waitStep struct {
@@ -128,6 +131,20 @@ func newWaitStep(name string, raw map[string]any) (*waitStep, error) {
 	if cfg.TaskID == "" {
 		return nil, fmt.Errorf("step.compute_wait %q: task_id is required", name)
 	}
+	if cfg.PollInterval != "" {
+		if d, err := time.ParseDuration(cfg.PollInterval); err != nil {
+			return nil, fmt.Errorf("step.compute_wait %q: poll_interval must be duration: %w", name, err)
+		} else if d <= 0 {
+			return nil, fmt.Errorf("step.compute_wait %q: poll_interval must be positive", name)
+		}
+	}
+	if cfg.Timeout != "" {
+		if d, err := time.ParseDuration(cfg.Timeout); err != nil {
+			return nil, fmt.Errorf("step.compute_wait %q: timeout must be duration: %w", name, err)
+		} else if d <= 0 {
+			return nil, fmt.Errorf("step.compute_wait %q: timeout must be positive", name)
+		}
+	}
 	if err := cfg.connectionConfig.validate(); err != nil {
 		return nil, fmt.Errorf("step.compute_wait %q: %w", name, err)
 	}
@@ -139,16 +156,74 @@ func (s *waitStep) Execute(ctx context.Context, _ map[string]any, _ map[string]m
 	if err != nil {
 		return errorResult(err.Error()), nil
 	}
-	tasks, err := client.listTasks(ctx)
-	if err != nil {
-		return errorResult(err.Error()), nil
-	}
-	for _, task := range tasks {
-		if task.ID == s.config.TaskID {
-			return &sdk.StepResult{Output: taskOutput(task)}, nil
+	pollInterval := durationOrDefault(s.config.PollInterval, time.Second)
+	timeout := durationOrDefault(s.config.Timeout, 5*time.Minute)
+	waitCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	for {
+		task, found, stalls, err := client.taskSnapshot(waitCtx, s.config.TaskID)
+		if err != nil {
+			return errorResult(err.Error()), nil
+		}
+		if !found {
+			return errorResult(fmt.Sprintf("task %q not found", s.config.TaskID)), nil
+		}
+
+		actionableStalls := s.config.actionableStalls(stalls)
+		if task.Status == protocol.TaskFailed || task.Status == protocol.TaskStalled || len(actionableStalls) > 0 {
+			output := taskOutput(task)
+			if len(actionableStalls) > 0 {
+				addStallOutput(output, actionableStalls[0])
+			}
+			output["error"] = taskWaitError(task, actionableStalls)
+			return &sdk.StepResult{StopPipeline: true, Output: output}, nil
+		}
+
+		if isTerminalTaskStatus(task.Status) {
+			proof, hasProof, err := client.findProof(waitCtx, task.ID)
+			if err != nil {
+				return errorResult(err.Error()), nil
+			}
+			output := taskOutput(task)
+			if hasProof {
+				addProofOutput(output, proof)
+			}
+			if hasProof && proof.Verifier.Status != protocol.VerificationAccepted {
+				output["error"] = fmt.Sprintf("task %q proof %q is %s", task.ID, proof.ID, proof.Verifier.Status)
+				return &sdk.StepResult{StopPipeline: true, Output: output}, nil
+			}
+			if hasProof || !s.config.requireProof() {
+				return &sdk.StepResult{Output: output}, nil
+			}
+		}
+
+		timer := time.NewTimer(pollInterval)
+		select {
+		case <-waitCtx.Done():
+			timer.Stop()
+			return errorResult(fmt.Sprintf("timed out waiting for task %q", s.config.TaskID)), nil
+		case <-timer.C:
 		}
 	}
-	return errorResult(fmt.Sprintf("task %q not found", s.config.TaskID)), nil
+}
+
+func (c waitConfig) requireProof() bool {
+	return c.RequireProof == nil || *c.RequireProof
+}
+
+func (c waitConfig) actionableStalls(stalls []taskStall) []taskStall {
+	if c.requireProof() {
+		return stalls
+	}
+	actionable := make([]taskStall, 0, len(stalls))
+	for _, stall := range stalls {
+		if stall.Reason == "proof_missing" {
+			continue
+		}
+		actionable = append(actionable, stall)
+	}
+	return actionable
 }
 
 type mapConfig struct {
@@ -208,6 +283,54 @@ func taskOutput(task protocol.Task) map[string]any {
 		"pool_id": task.PoolID,
 		"status":  string(task.Status),
 	}
+}
+
+func addProofOutput(output map[string]any, proof protocol.ProofReceipt) {
+	output["proof_id"] = proof.ID
+	output["proof_status"] = string(proof.Verifier.Status)
+	output["proof_provider"] = proof.Verifier.Provider
+	output["worker_id"] = proof.WorkerID
+	output["artifact_hash"] = proof.ArtifactHash
+}
+
+func addStallOutput(output map[string]any, stall taskStall) {
+	output["stall_reason"] = stall.Reason
+	if stall.LeaseID != "" {
+		output["lease_id"] = stall.LeaseID
+	}
+	if stall.AgentID != "" {
+		output["agent_id"] = stall.AgentID
+	}
+	if stall.AgeMS != 0 {
+		output["stall_age_ms"] = stall.AgeMS
+	}
+}
+
+func taskWaitError(task protocol.Task, stalls []taskStall) string {
+	if len(stalls) > 0 {
+		return fmt.Sprintf("task %q stalled: %s", task.ID, stalls[0].Reason)
+	}
+	return fmt.Sprintf("task %q %s", task.ID, task.Status)
+}
+
+func isTerminalTaskStatus(status protocol.TaskStatus) bool {
+	switch status {
+	case protocol.TaskSucceeded, protocol.TaskFailed, protocol.TaskStalled:
+		return true
+	default:
+		return false
+	}
+}
+
+func durationOrDefault(raw string, fallback time.Duration) time.Duration {
+	if raw == "" {
+		return fallback
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil || d <= 0 {
+		return fallback
+	}
+	return d
 }
 
 func errorResult(msg string) *sdk.StepResult {

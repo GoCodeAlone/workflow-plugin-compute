@@ -18,6 +18,19 @@ type computeClient struct {
 	http    *http.Client
 }
 
+type taskList struct {
+	Tasks  []protocol.Task `json:"tasks"`
+	Stalls []taskStall     `json:"stalls,omitempty"`
+}
+
+type taskStall struct {
+	TaskID  string `json:"task_id,omitempty"`
+	LeaseID string `json:"lease_id,omitempty"`
+	AgentID string `json:"agent_id,omitempty"`
+	Reason  string `json:"reason"`
+	AgeMS   int64  `json:"age_ms"`
+}
+
 func newComputeClient(serverURL, token string, timeout time.Duration) (*computeClient, error) {
 	parsed, err := url.ParseRequestURI(serverURL)
 	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") {
@@ -43,15 +56,54 @@ func (c *computeClient) submitTask(ctx context.Context, task protocol.Task) (pro
 	return out.Task, nil
 }
 
-func (c *computeClient) listTasks(ctx context.Context) ([]protocol.Task, error) {
-	var out struct {
-		Tasks  []protocol.Task `json:"tasks"`
-		Stalls []any           `json:"stalls,omitempty"`
-	}
+func (c *computeClient) listTasks(ctx context.Context) (taskList, error) {
+	var out taskList
 	if err := c.doJSON(ctx, http.MethodGet, "/v1/tasks", nil, http.StatusOK, &out); err != nil {
+		return taskList{}, err
+	}
+	return out, nil
+}
+
+func (c *computeClient) taskSnapshot(ctx context.Context, id string) (protocol.Task, bool, []taskStall, error) {
+	list, err := c.listTasks(ctx)
+	if err != nil {
+		return protocol.Task{}, false, nil, err
+	}
+	matchingStalls := make([]taskStall, 0)
+	for _, stall := range list.Stalls {
+		if stall.TaskID == id {
+			matchingStalls = append(matchingStalls, stall)
+		}
+	}
+	for _, task := range list.Tasks {
+		if task.ID == id {
+			return task, true, matchingStalls, nil
+		}
+	}
+	return protocol.Task{}, false, matchingStalls, nil
+}
+
+func (c *computeClient) listProofs(ctx context.Context) ([]protocol.ProofReceipt, error) {
+	var out struct {
+		Proofs []protocol.ProofReceipt `json:"proofs"`
+	}
+	if err := c.doJSON(ctx, http.MethodGet, "/v1/proofs", nil, http.StatusOK, &out); err != nil {
 		return nil, err
 	}
-	return out.Tasks, nil
+	return out.Proofs, nil
+}
+
+func (c *computeClient) findProof(ctx context.Context, taskID string) (protocol.ProofReceipt, bool, error) {
+	proofs, err := c.listProofs(ctx)
+	if err != nil {
+		return protocol.ProofReceipt{}, false, err
+	}
+	for _, proof := range proofs {
+		if proof.TaskID == taskID {
+			return proof, true, nil
+		}
+	}
+	return protocol.ProofReceipt{}, false, nil
 }
 
 func (c *computeClient) doJSON(ctx context.Context, method, path string, body any, want int, out any) error {
