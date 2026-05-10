@@ -42,6 +42,38 @@ type contributionList struct {
 	Total  protocol.ContributionUnits   `json:"total"`
 }
 
+type githubRunnerRegistrationRequest struct {
+	AgentID    string   `json:"agent_id"`
+	Repository string   `json:"repository"`
+	Labels     []string `json:"labels,omitempty"`
+}
+
+type githubRunnerRegistration struct {
+	ID           string    `json:"id"`
+	AgentID      string    `json:"agent_id"`
+	OrgID        string    `json:"org_id"`
+	PoolID       string    `json:"pool_id"`
+	Repository   string    `json:"repository"`
+	RunnerName   string    `json:"runner_name"`
+	Labels       []string  `json:"labels"`
+	RegisteredAt time.Time `json:"registered_at"`
+}
+
+type githubRunnerJobRequest struct {
+	Repository         string            `json:"repository,omitempty"`
+	RegistrationID     string            `json:"registration_id"`
+	WorkflowRunID      int64             `json:"workflow_run_id"`
+	WorkflowRunAttempt int64             `json:"workflow_run_attempt,omitempty"`
+	WorkflowJobID      int64             `json:"workflow_job_id"`
+	WorkflowJobName    string            `json:"workflow_job_name"`
+	Ref                string            `json:"ref,omitempty"`
+	SHA                string            `json:"sha,omitempty"`
+	PolicyID           string            `json:"policy_id"`
+	TimeoutSeconds     int               `json:"timeout_seconds,omitempty"`
+	CommandArgs        []string          `json:"command_args"`
+	Labels             map[string]string `json:"labels,omitempty"`
+}
+
 func newComputeClient(serverURL, token string, timeout time.Duration) (*computeClient, error) {
 	parsed, err := url.ParseRequestURI(serverURL)
 	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") {
@@ -153,6 +185,26 @@ func (c *computeClient) contributions(ctx context.Context, accountID string) (co
 		return contributionList{}, err
 	}
 	return out, nil
+}
+
+func (c *computeClient) registerGitHubRunner(ctx context.Context, req githubRunnerRegistrationRequest) (githubRunnerRegistration, error) {
+	var out struct {
+		Registration githubRunnerRegistration `json:"registration"`
+	}
+	if err := c.doJSON(ctx, http.MethodPost, "/v1/adapters/github-runner/registrations", req, http.StatusCreated, &out); err != nil {
+		return githubRunnerRegistration{}, err
+	}
+	return out.Registration, nil
+}
+
+func (c *computeClient) bridgeGitHubRunnerJob(ctx context.Context, req githubRunnerJobRequest) (protocol.Task, error) {
+	var out struct {
+		Task protocol.Task `json:"task"`
+	}
+	if err := c.doJSON(ctx, http.MethodPost, "/v1/adapters/github-runner/jobs", req, http.StatusCreated, &out); err != nil {
+		return protocol.Task{}, err
+	}
+	return out.Task, nil
 }
 
 func (c *computeClient) doJSON(ctx context.Context, method, path string, body any, want int, out any) error {

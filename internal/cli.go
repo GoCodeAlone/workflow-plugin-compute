@@ -53,10 +53,10 @@ func (c *computeCLI) RunCLI(args []string) int {
 
 func (c *computeCLI) run(ctx context.Context, args []string) error {
 	if len(args) == 0 || args[0] != "compute" {
-		return errors.New("usage: wfctl compute <enroll|pools|run|audit|accounting>")
+		return errors.New("usage: wfctl compute <enroll|pools|run|audit|accounting|github-runner>")
 	}
 	if len(args) == 1 {
-		return errors.New("usage: wfctl compute <enroll|pools|run|audit|accounting>")
+		return errors.New("usage: wfctl compute <enroll|pools|run|audit|accounting|github-runner>")
 	}
 	switch args[1] {
 	case "enroll":
@@ -69,6 +69,8 @@ func (c *computeCLI) run(ctx context.Context, args []string) error {
 		return c.runAudit(ctx, args[2:])
 	case "accounting":
 		return c.runAccounting(ctx, args[2:])
+	case "github-runner":
+		return c.runGitHubRunner(ctx, args[2:])
 	default:
 		return fmt.Errorf("unknown wfctl compute command %q", args[1])
 	}
@@ -233,6 +235,110 @@ func (c *computeCLI) runAccounting(ctx context.Context, args []string) error {
 		"account_id": *accountID,
 		"events":     contributions.Events,
 		"total":      contributions.Total,
+	})
+}
+
+func (c *computeCLI) runGitHubRunner(ctx context.Context, args []string) error {
+	if len(args) == 0 {
+		return errors.New("usage: wfctl compute github-runner <register|bridge-job>")
+	}
+	switch args[0] {
+	case "register":
+		return c.runGitHubRunnerRegister(ctx, args[1:])
+	case "bridge-job":
+		return c.runGitHubRunnerBridgeJob(ctx, args[1:])
+	default:
+		return fmt.Errorf("unknown wfctl compute github-runner command %q", args[0])
+	}
+}
+
+func (c *computeCLI) runGitHubRunnerRegister(ctx context.Context, args []string) error {
+	fs := c.newFlagSet("compute github-runner register")
+	common := addCLICommonFlags(fs)
+	agentID := fs.String("agent", "", "enrolled compute agent id")
+	repository := fs.String("repo", "", "GitHub repository owner/name")
+	labels := csvFlag{}
+	fs.Var(&labels, "label", "runner label; repeatable or comma-separated")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *agentID == "" || *repository == "" {
+		return errors.New("--agent and --repo are required")
+	}
+	client, err := common.client()
+	if err != nil {
+		return err
+	}
+	registration, err := client.registerGitHubRunner(ctx, githubRunnerRegistrationRequest{
+		AgentID:    *agentID,
+		Repository: *repository,
+		Labels:     labels.values(),
+	})
+	if err != nil {
+		return err
+	}
+	return writeJSON(c.stdout, map[string]any{"registration": registration})
+}
+
+func (c *computeCLI) runGitHubRunnerBridgeJob(ctx context.Context, args []string) error {
+	fs := c.newFlagSet("compute github-runner bridge-job")
+	common := addCLICommonFlags(fs)
+	repository := fs.String("repo", "", "GitHub repository owner/name")
+	registrationID := fs.String("registration", "", "compute GitHub runner registration id")
+	runID := fs.Int64("run-id", 0, "GitHub workflow run id")
+	runAttempt := fs.Int64("run-attempt", 1, "GitHub workflow run attempt")
+	jobID := fs.Int64("job-id", 0, "GitHub workflow job id")
+	jobName := fs.String("job-name", "", "GitHub workflow job name")
+	ref := fs.String("ref", "", "Git ref")
+	sha := fs.String("sha", "", "Git commit sha")
+	policyID := fs.String("policy", "policy-1", "policy id")
+	timeoutSeconds := fs.Int("timeout", 60, "timeout seconds")
+	labels := csvFlag{}
+	fs.Var(&labels, "label", "task label KEY=VALUE; repeatable or comma-separated")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *registrationID == "" || *runID <= 0 || *jobID <= 0 || *jobName == "" || *policyID == "" {
+		return errors.New("--registration, --run-id, --job-id, --job-name, and --policy are required")
+	}
+	if *timeoutSeconds <= 0 {
+		return errors.New("--timeout must be positive")
+	}
+	if fs.NArg() == 0 {
+		return errors.New("command args are required after flags")
+	}
+	labelMap, err := parseLabelMap(labels.values())
+	if err != nil {
+		return err
+	}
+	client, err := common.client()
+	if err != nil {
+		return err
+	}
+	task, err := client.bridgeGitHubRunnerJob(ctx, githubRunnerJobRequest{
+		Repository:         *repository,
+		RegistrationID:     *registrationID,
+		WorkflowRunID:      *runID,
+		WorkflowRunAttempt: *runAttempt,
+		WorkflowJobID:      *jobID,
+		WorkflowJobName:    *jobName,
+		Ref:                *ref,
+		SHA:                *sha,
+		PolicyID:           *policyID,
+		TimeoutSeconds:     *timeoutSeconds,
+		CommandArgs:        fs.Args(),
+		Labels:             labelMap,
+	})
+	if err != nil {
+		return err
+	}
+	return writeJSON(c.stdout, map[string]any{
+		"task_id":    task.ID,
+		"status":     task.Status,
+		"org_id":     task.OrgID,
+		"pool_id":    task.PoolID,
+		"policy_id":  task.PolicyID,
+		"input_hash": task.InputHash,
 	})
 }
 
@@ -406,6 +512,21 @@ func summarizePools(agents []protocol.Worker, tasks []protocol.Task) []poolSumma
 		return strings.Compare(a.PoolID, b.PoolID)
 	})
 	return out
+}
+
+func parseLabelMap(values []string) (map[string]string, error) {
+	if len(values) == 0 {
+		return nil, nil
+	}
+	labels := make(map[string]string, len(values))
+	for _, value := range values {
+		name, label, ok := strings.Cut(value, "=")
+		if !ok || name == "" || label == "" {
+			return nil, fmt.Errorf("label %q must be KEY=VALUE", value)
+		}
+		labels[name] = label
+	}
+	return labels, nil
 }
 
 type auditSummary struct {

@@ -27,7 +27,7 @@ step: `step.compute_dispatch` → submit task
 step: `step.compute_wait` → wait/read proof
 step: `step.compute_map` → fanout deterministic task set
 cmd: `workflow-plugin-compute` → external SDK entrypoint
-wfctl: `wfctl compute enroll|pools|run|audit|accounting export` → plugin CLI → core API
+wfctl: `wfctl compute enroll|pools|run|audit|accounting export|github-runner register|github-runner bridge-job` → plugin CLI → core API
 
 §V
 
@@ -44,6 +44,7 @@ V10: `wfctl compute` output never includes bootstrap API token or raw secret val
 V11: `wfctl compute run` uses same v0 task signature envelope as dispatch step until scoped client signing lands
 V12: token-bearing compute client rejects cleartext non-loopback server URLs
 V13: `wfctl compute run` emits compact receipt only; workload + signature omitted from stdout
+V14: `wfctl compute github-runner bridge-job` requires registration id and emits compact receipt only
 
 §T
 
@@ -54,6 +55,7 @@ T3|x|implement `step.compute_dispatch` strict schema + API client|I.step,V2,V3,V
 T4|x|implement `step.compute_wait` polling/proof output|I.step,V4
 T5|x|implement `step.compute_map` fanout submit/wait behavior|I.step,V4,V9
 T6|x|implement `wfctl compute` plugin CLI provider + manifest declaration|I.cmd,I.wfctl,C8,V1,V10,V11,V12,V13
+T7|x|add `wfctl compute github-runner` adapter commands for runner register/job bridge|I.cmd,I.wfctl,C5,C8,V10,V12,V14
 
 §B
 
