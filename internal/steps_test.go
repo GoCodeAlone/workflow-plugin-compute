@@ -65,6 +65,16 @@ func TestDispatchStepRejectsUnknownConfig(t *testing.T) {
 	}
 }
 
+func TestDispatchStepRejectsUnknownNestedWorkloadConfig(t *testing.T) {
+	cfg := dispatchConfigMap("https://compute.example.test")
+	workload := cfg["workload"].(map[string]any)
+	command := workload["command"].(map[string]any)
+	command["extra"] = true
+	if _, err := newDispatchStep("dispatch", cfg); err == nil {
+		t.Fatal("expected strict nested unknown-field error")
+	}
+}
+
 func TestWaitStepReadsTaskStatus(t *testing.T) {
 	var taskCalls int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -351,6 +361,21 @@ func TestMapStepRejectsUnknownConfig(t *testing.T) {
 	}
 	if _, err := newMapStep("map", cfg); err == nil {
 		t.Fatal("expected strict unknown-field error")
+	}
+}
+
+func TestMapStepRejectsUnknownNestedTaskWorkloadConfig(t *testing.T) {
+	task := taskConfigMap("task-1")
+	workload := task["workload"].(map[string]any)
+	command := workload["command"].(map[string]any)
+	command["extra"] = true
+	cfg := map[string]any{
+		"server_url":     "https://compute.example.test",
+		"auth_token_ref": "secret:compute-token",
+		"tasks":          []any{task},
+	}
+	if _, err := newMapStep("map", cfg); err == nil {
+		t.Fatal("expected strict nested unknown-field error")
 	}
 }
 
