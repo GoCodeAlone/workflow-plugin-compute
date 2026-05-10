@@ -61,6 +61,147 @@ func TestT6_CLIProviderRunsComputeCommand(t *testing.T) {
 	}
 }
 
+func TestT8_CLISubmitCommandUsesCompactReceipt(t *testing.T) {
+	var got protocol.Task
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/tasks" {
+			t.Fatalf("request: %s %s", r.Method, r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Fatalf("decode task: %v", err)
+		}
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(map[string]any{"task": got})
+	}))
+	defer srv.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := newCLI(&stdout, &stderr).RunCLI([]string{
+		"compute", "submit", "command",
+		"--server", srv.URL,
+		"--token", "token",
+		"--id", "task-1",
+		"--org", "org-1",
+		"--pool", "pool-1",
+		"--workdir", "repo",
+		"--env", "TOKEN=secret:github-token",
+		"--artifact", "artifacts/result.json",
+		"true",
+	})
+
+	if code != 0 {
+		t.Fatalf("RunCLI code=%d stderr=%s", code, stderr.String())
+	}
+	if got.Workload.Kind != protocol.WorkloadCommand || got.Workload.Command.WorkingDirectory != "repo" {
+		t.Fatalf("task: got %+v", got)
+	}
+	if got.Workload.Command.Env[0].SecretRef != "secret:github-token" || got.Workload.Command.ArtifactAllowlist[0] != "artifacts/result.json" {
+		t.Fatalf("command refs: got %+v", got.Workload.Command)
+	}
+	for _, forbidden := range [][]byte{[]byte("token"), []byte("signature"), []byte("workload"), []byte("secret:github-token")} {
+		if bytes.Contains(stdout.Bytes(), forbidden) {
+			t.Fatalf("stdout leaked %q: %s", forbidden, stdout.String())
+		}
+	}
+}
+
+func TestT8_CLISubmitContainerBuild(t *testing.T) {
+	var got protocol.Task
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/tasks" {
+			t.Fatalf("request: %s %s", r.Method, r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Fatalf("decode task: %v", err)
+		}
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(map[string]any{"task": got})
+	}))
+	defer srv.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := newCLI(&stdout, &stderr).RunCLI([]string{
+		"compute", "submit", "container-build",
+		"--server", srv.URL,
+		"--token", "token",
+		"--id", "image-1",
+		"--org", "org-1",
+		"--pool", "pool-1",
+		"--context", "repo/services/api",
+		"--dockerfile", "Dockerfile",
+		"--tag", "registry.example/api:sha",
+		"--push-target-ref", "registry:docr-shared",
+	})
+
+	if code != 0 {
+		t.Fatalf("RunCLI code=%d stderr=%s", code, stderr.String())
+	}
+	if got.Workload.Kind != protocol.WorkloadContainerBuild || got.Workload.ContainerBuild.ContextDirectory != "repo/services/api" {
+		t.Fatalf("task: got %+v", got)
+	}
+	if got.Workload.ContainerBuild.PushTargetRef != "registry:docr-shared" {
+		t.Fatalf("push target: got %+v", got.Workload.ContainerBuild)
+	}
+	for _, forbidden := range [][]byte{[]byte("token"), []byte("signature"), []byte("workload"), []byte("registry:docr-shared")} {
+		if bytes.Contains(stdout.Bytes(), forbidden) {
+			t.Fatalf("stdout leaked %q: %s", forbidden, stdout.String())
+		}
+	}
+}
+
+func TestT8_CLISubmitValidatesBeforeAPICall(t *testing.T) {
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		calls++
+	}))
+	defer srv.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := newCLI(&stdout, &stderr).RunCLI([]string{
+		"compute", "submit", "container-build",
+		"--server", srv.URL,
+		"--token", "token",
+		"--org", "org-1",
+		"--pool", "pool-1",
+	})
+
+	if code == 0 {
+		t.Fatal("expected missing tag to fail")
+	}
+	if calls != 0 {
+		t.Fatalf("expected local validation before API call, calls=%d", calls)
+	}
+}
+
+func TestT8_CLISubmitCommandRejectsRawEnvBeforeAPICall(t *testing.T) {
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		calls++
+	}))
+	defer srv.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := newCLI(&stdout, &stderr).RunCLI([]string{
+		"compute", "submit", "command",
+		"--server", srv.URL,
+		"--token", "token",
+		"--org", "org-1",
+		"--pool", "pool-1",
+		"--env", "TOKEN=raw-secret",
+		"true",
+	})
+
+	if code == 0 {
+		t.Fatal("expected raw env value to fail")
+	}
+	if calls != 0 {
+		t.Fatalf("expected local validation before API call, calls=%d", calls)
+	}
+	if bytes.Contains(stdout.Bytes(), []byte("raw-secret")) || bytes.Contains(stderr.Bytes(), []byte("raw-secret")) {
+		t.Fatalf("output leaked raw env: stdout=%s stderr=%s", stdout.String(), stderr.String())
+	}
+}
+
 func TestT7_CLIGitHubRunnerBridgeUsesCompactReceipt(t *testing.T) {
 	var got githubRunnerJobRequest
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

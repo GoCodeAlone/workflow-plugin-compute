@@ -65,6 +65,8 @@ func (c *computeCLI) run(ctx context.Context, args []string) error {
 		return c.runPools(ctx, args[2:])
 	case "run":
 		return c.runRun(ctx, args[2:])
+	case "submit":
+		return c.runSubmit(ctx, args[2:])
 	case "audit":
 		return c.runAudit(ctx, args[2:])
 	case "accounting":
@@ -179,6 +181,107 @@ func (c *computeCLI) runRun(ctx context.Context, args []string) error {
 			WorkingDirectory: *workdir,
 		},
 	})
+	submitted, err := client.submitTask(ctx, task)
+	if err != nil {
+		return err
+	}
+	return writeJSON(c.stdout, taskReceipt{
+		TaskID:    submitted.ID,
+		Status:    submitted.Status,
+		OrgID:     submitted.OrgID,
+		PoolID:    submitted.PoolID,
+		PolicyID:  submitted.PolicyID,
+		InputHash: submitted.InputHash,
+	})
+}
+
+func (c *computeCLI) runSubmit(ctx context.Context, args []string) error {
+	if len(args) == 0 {
+		return errors.New("usage: wfctl compute submit <command|container-build>")
+	}
+	switch args[0] {
+	case "command":
+		return c.runSubmitCommand(ctx, args[1:])
+	case "container-build":
+		return c.runSubmitContainerBuild(ctx, args[1:])
+	default:
+		return fmt.Errorf("unknown wfctl compute submit workload %q", args[0])
+	}
+}
+
+func (c *computeCLI) runSubmitCommand(ctx context.Context, args []string) error {
+	fs := c.newFlagSet("compute submit command")
+	common := addCLICommonFlags(fs)
+	taskFlags := addCLITaskFlags(fs)
+	workdir := fs.String("workdir", "", "working directory")
+	envRefs := csvFlag{}
+	artifacts := csvFlag{}
+	fs.Var(&envRefs, "env", "env ref NAME=valueRef or NAME=secret:ref")
+	fs.Var(&artifacts, "artifact", "artifact allowlist path")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() == 0 {
+		return errors.New("command args are required after flags")
+	}
+	if err := taskFlags.validate(); err != nil {
+		return err
+	}
+	env, err := parseEnvRefs(envRefs.values())
+	if err != nil {
+		return err
+	}
+	client, err := common.client()
+	if err != nil {
+		return err
+	}
+	task := taskFlags.task(protocol.WorkloadSpec{
+		Kind: protocol.WorkloadCommand,
+		Command: &protocol.CommandWorkload{
+			Args:              fs.Args(),
+			WorkingDirectory:  *workdir,
+			Env:               env,
+			ArtifactAllowlist: artifacts.values(),
+		},
+	})
+	return c.writeTaskReceipt(ctx, client, task)
+}
+
+func (c *computeCLI) runSubmitContainerBuild(ctx context.Context, args []string) error {
+	fs := c.newFlagSet("compute submit container-build")
+	common := addCLICommonFlags(fs)
+	taskFlags := addCLITaskFlags(fs)
+	contextDir := fs.String("context", ".", "container build context")
+	dockerfile := fs.String("dockerfile", "Dockerfile", "Dockerfile path relative to context")
+	pushTargetRef := fs.String("push-target-ref", "", "allowed registry push target ref")
+	tags := csvFlag{}
+	fs.Var(&tags, "tag", "image tag; repeatable or comma-separated")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if err := taskFlags.validate(); err != nil {
+		return err
+	}
+	if len(tags.values()) == 0 {
+		return errors.New("at least one --tag is required")
+	}
+	client, err := common.client()
+	if err != nil {
+		return err
+	}
+	task := taskFlags.task(protocol.WorkloadSpec{
+		Kind: protocol.WorkloadContainerBuild,
+		ContainerBuild: &protocol.ContainerBuildWorkload{
+			ContextDirectory: *contextDir,
+			Dockerfile:       *dockerfile,
+			Tags:             tags.values(),
+			PushTargetRef:    *pushTargetRef,
+		},
+	})
+	return c.writeTaskReceipt(ctx, client, task)
+}
+
+func (c *computeCLI) writeTaskReceipt(ctx context.Context, client *computeClient, task protocol.Task) error {
 	submitted, err := client.submitTask(ctx, task)
 	if err != nil {
 		return err
@@ -527,6 +630,26 @@ func parseLabelMap(values []string) (map[string]string, error) {
 		labels[name] = label
 	}
 	return labels, nil
+}
+
+func parseEnvRefs(values []string) ([]protocol.EnvRef, error) {
+	refs := make([]protocol.EnvRef, 0, len(values))
+	for _, value := range values {
+		name, ref, ok := strings.Cut(value, "=")
+		if !ok || name == "" || ref == "" {
+			return nil, fmt.Errorf("env ref %q must be NAME=ref", value)
+		}
+		env := protocol.EnvRef{Name: name}
+		if strings.HasPrefix(ref, "secret:") {
+			env.SecretRef = ref
+		} else if strings.HasPrefix(ref, "config:") {
+			env.ValueRef = ref
+		} else {
+			return nil, fmt.Errorf("env %q must reference secret: or config:", name)
+		}
+		refs = append(refs, env)
+	}
+	return refs, nil
 }
 
 type auditSummary struct {
