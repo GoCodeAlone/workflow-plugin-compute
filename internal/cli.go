@@ -334,10 +334,15 @@ func (c *computeCLI) runAccounting(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	rewards, err := client.rewards(ctx)
+	if err != nil {
+		return err
+	}
 	return writeJSON(c.stdout, map[string]any{
 		"account_id": *accountID,
 		"events":     contributions.Events,
 		"total":      contributions.Total,
+		"rewards":    rewardsForAccount(rewards.Rewards, *accountID),
 	})
 }
 
@@ -443,6 +448,16 @@ func (c *computeCLI) runGitHubRunnerBridgeJob(ctx context.Context, args []string
 		"policy_id":  task.PolicyID,
 		"input_hash": task.InputHash,
 	})
+}
+
+func rewardsForAccount(rewards []map[string]any, accountID string) []map[string]any {
+	matching := make([]map[string]any, 0, len(rewards))
+	for _, reward := range rewards {
+		if reward["account_id"] == accountID {
+			matching = append(matching, reward)
+		}
+	}
+	return matching
 }
 
 func (c *computeCLI) newFlagSet(name string) *flag.FlagSet {

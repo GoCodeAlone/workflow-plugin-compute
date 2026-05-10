@@ -46,6 +46,7 @@ V12: token-bearing compute client rejects cleartext non-loopback server URLs
 V13: `wfctl compute run` emits compact receipt only; workload + signature omitted from stdout
 V14: `wfctl compute github-runner bridge-job` requires registration id and emits compact receipt only
 V15: `wfctl compute submit` supports command/container-build without leaking workload/signature/token to stdout
+V16: `wfctl compute accounting export` includes raw contribution units and policy reward outputs without leaking token
 
 §T
 
@@ -58,6 +59,7 @@ T5|x|implement `step.compute_map` fanout submit/wait behavior|I.step,V4,V9
 T6|x|implement `wfctl compute` plugin CLI provider + manifest declaration|I.cmd,I.wfctl,C8,V1,V10,V11,V12,V13
 T7|x|add `wfctl compute github-runner` adapter commands for runner register/job bridge|I.cmd,I.wfctl,C5,C8,V10,V12,V14
 T8|x|add `wfctl compute submit command|container-build` for ad hoc workload demos|I.cmd,I.wfctl,C8,V10,V12,V15
+T9|x|include rewards in `wfctl compute accounting export`|I.cmd,I.wfctl,C8,V10,V16
 
 §B
 

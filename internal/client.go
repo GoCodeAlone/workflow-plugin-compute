@@ -42,6 +42,10 @@ type contributionList struct {
 	Total  protocol.ContributionUnits   `json:"total"`
 }
 
+type rewardList struct {
+	Rewards []map[string]any `json:"rewards"`
+}
+
 type githubRunnerRegistrationRequest struct {
 	AgentID    string   `json:"agent_id"`
 	Repository string   `json:"repository"`
@@ -183,6 +187,14 @@ func (c *computeClient) contributions(ctx context.Context, accountID string) (co
 	var out contributionList
 	if err := c.doJSON(ctx, http.MethodGet, "/v1/accounts/"+url.PathEscape(accountID)+"/contributions", nil, http.StatusOK, &out); err != nil {
 		return contributionList{}, err
+	}
+	return out, nil
+}
+
+func (c *computeClient) rewards(ctx context.Context) (rewardList, error) {
+	var out rewardList
+	if err := c.doJSON(ctx, http.MethodGet, "/v1/rewards", nil, http.StatusOK, &out); err != nil {
+		return rewardList{}, err
 	}
 	return out, nil
 }

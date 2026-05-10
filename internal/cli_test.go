@@ -202,6 +202,95 @@ func TestT8_CLISubmitCommandRejectsRawEnvBeforeAPICall(t *testing.T) {
 	}
 }
 
+func TestT9_CLIAccountingExportIncludesRewards(t *testing.T) {
+	var paths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		if r.Header.Get("Authorization") != "Bearer token" {
+			t.Fatalf("auth header: got %q", r.Header.Get("Authorization"))
+		}
+		switch r.URL.Path {
+		case "/v1/accounts/worker-1/contributions":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"events": []protocol.ContributionEvent{{
+					ID:        "contrib-1",
+					Type:      protocol.ContributionRecorded,
+					OrgID:     "org-1",
+					AccountID: "worker-1",
+					TaskID:    "task-1",
+					ProofID:   "proof-1",
+					Units:     protocol.ContributionUnits{CPUMillis: 1000},
+				}},
+				"total": protocol.ContributionUnits{CPUMillis: 1000},
+			})
+		case "/v1/rewards":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"rewards": []map[string]any{{
+					"org_id":     "org-1",
+					"account_id": "worker-1",
+					"units":      protocol.ContributionUnits{CPUMillis: 1000},
+					"policy":     "points",
+					"points":     1,
+					"badge":      "night-builder",
+				}, {
+					"org_id":     "org-1",
+					"account_id": "other-worker",
+					"units":      protocol.ContributionUnits{CPUMillis: 2000},
+					"policy":     "points",
+					"points":     2,
+				}},
+			})
+		default:
+			t.Fatalf("path: %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := newCLI(&stdout, &stderr).RunCLI([]string{
+		"compute", "accounting", "export",
+		"--server", srv.URL,
+		"--token", "token",
+		"--account", "worker-1",
+	})
+
+	if code != 0 {
+		t.Fatalf("RunCLI code=%d stderr=%s", code, stderr.String())
+	}
+	var got struct {
+		AccountID string                       `json:"account_id"`
+		Events    []protocol.ContributionEvent `json:"events"`
+		Total     protocol.ContributionUnits   `json:"total"`
+		Rewards   []map[string]any             `json:"rewards"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
+		t.Fatalf("decode accounting export: %v", err)
+	}
+	if got.AccountID != "worker-1" || got.Total.CPUMillis != 1000 || len(got.Events) != 1 {
+		t.Fatalf("raw contribution output: got %+v", got)
+	}
+	if len(got.Rewards) != 1 || got.Rewards[0]["account_id"] != "worker-1" || got.Rewards[0]["points"] != float64(1) {
+		t.Fatalf("reward output: got %+v", got.Rewards)
+	}
+	if got.Rewards[0]["badge"] != "night-builder" {
+		t.Fatalf("policy-specific reward field was not preserved: %+v", got.Rewards[0])
+	}
+	for _, want := range []string{"/v1/accounts/worker-1/contributions", "/v1/rewards"} {
+		found := false
+		for _, path := range paths {
+			if path == want {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("missing request to %s; paths=%v", want, paths)
+		}
+	}
+	if bytes.Contains(stdout.Bytes(), []byte("token")) {
+		t.Fatalf("stdout leaked token: %s", stdout.String())
+	}
+}
+
 func TestT7_CLIGitHubRunnerBridgeUsesCompactReceipt(t *testing.T) {
 	var got githubRunnerJobRequest
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
