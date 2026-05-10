@@ -15,6 +15,7 @@ C4: Secrets are refs, not raw values; Workflow secrets surface owns resolution.
 C5: GitHub runner adapter is demo integration, not core plugin assumption.
 C6: wfctl used for validate/build/CI where supported.
 C7: Standalone repo verification uses `GOWORK=off` unless parent `go.work` includes repo.
+C8: `wfctl compute` CLI adapter owns operator UX only; scheduler/ledger/proof semantics stay core.
 
 §I
 
@@ -26,6 +27,7 @@ step: `step.compute_dispatch` → submit task
 step: `step.compute_wait` → wait/read proof
 step: `step.compute_map` → fanout deterministic task set
 cmd: `workflow-plugin-compute` → external SDK entrypoint
+wfctl: `wfctl compute enroll|pools|run|audit|accounting export` → plugin CLI → core API
 
 §V
 
@@ -38,6 +40,10 @@ V6: plugin CI uses `RELEASES_TOKEN` + `GOPRIVATE` before fetching private GoCode
 V7: `step.compute_wait` stops on task failure/stall using task API state; proof API outage cannot mask failed/stalled task status
 V8: `step.compute_wait` proof success requires verifier status `accepted`; rejected/unknown proof metadata never satisfies required proof
 V9: `step.compute_map` timeout output is deterministic even if context expires during an HTTP poll
+V10: `wfctl compute` output never includes bootstrap API token or raw secret values
+V11: `wfctl compute run` uses same v0 task signature envelope as dispatch step until scoped client signing lands
+V12: token-bearing compute client rejects cleartext non-loopback server URLs
+V13: `wfctl compute run` emits compact receipt only; workload + signature omitted from stdout
 
 §T
 
@@ -47,6 +53,7 @@ T2|x|implement `compute.provider` + `compute.pool` strict schemas|I.module,V2,V3
 T3|x|implement `step.compute_dispatch` strict schema + API client|I.step,V2,V3,V4
 T4|x|implement `step.compute_wait` polling/proof output|I.step,V4
 T5|x|implement `step.compute_map` fanout submit/wait behavior|I.step,V4,V9
+T6|x|implement `wfctl compute` plugin CLI provider + manifest declaration|I.cmd,I.wfctl,C8,V1,V10,V11,V12,V13
 
 §B
 
@@ -56,3 +63,6 @@ B2|2026-05-09|CI could not fetch private `workflow-compute` Go module until priv
 B3|2026-05-09|review found wait-step failed tasks depended on proof API and discarded task stall flags|V7
 B4|2026-05-09|review found wait-step accepted any proof receipt status as satisfying proof|V8
 B5|2026-05-09|CI exposed `compute_map` timeout test receiving raw context-deadline transport error|V9
+B6|2026-05-10|live `wfctl compute run` task used CLI-specific signature key rejected by core v0 verifier|V11
+B7|2026-05-10|review found token-bearing CLI could post to cleartext non-loopback `http://` server|V12
+B8|2026-05-10|review found `wfctl compute run` stdout included full workload + signature envelope|V13

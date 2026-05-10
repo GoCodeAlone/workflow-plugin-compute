@@ -5,8 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/GoCodeAlone/workflow-compute/pkg/protocol"
@@ -16,6 +18,10 @@ type computeClient struct {
 	baseURL *url.URL
 	token   string
 	http    *http.Client
+}
+
+type agentList struct {
+	Agents []protocol.Worker `json:"agents"`
 }
 
 type taskList struct {
@@ -31,10 +37,18 @@ type taskStall struct {
 	AgeMS   int64  `json:"age_ms"`
 }
 
+type contributionList struct {
+	Events []protocol.ContributionEvent `json:"events"`
+	Total  protocol.ContributionUnits   `json:"total"`
+}
+
 func newComputeClient(serverURL, token string, timeout time.Duration) (*computeClient, error) {
 	parsed, err := url.ParseRequestURI(serverURL)
 	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") {
 		return nil, fmt.Errorf("server_url must be absolute http(s) URL")
+	}
+	if token != "" && parsed.Scheme != "https" && !isLoopbackHost(parsed.Hostname()) {
+		return nil, fmt.Errorf("server_url must use https when auth token is set")
 	}
 	if timeout <= 0 {
 		timeout = 30 * time.Second
@@ -46,6 +60,15 @@ func newComputeClient(serverURL, token string, timeout time.Duration) (*computeC
 	}, nil
 }
 
+func isLoopbackHost(host string) bool {
+	host = strings.TrimSpace(strings.Trim(host, "[]"))
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
 func (c *computeClient) submitTask(ctx context.Context, task protocol.Task) (protocol.Task, error) {
 	var out struct {
 		Task protocol.Task `json:"task"`
@@ -54,6 +77,24 @@ func (c *computeClient) submitTask(ctx context.Context, task protocol.Task) (pro
 		return protocol.Task{}, err
 	}
 	return out.Task, nil
+}
+
+func (c *computeClient) enrollAgent(ctx context.Context, req enrollRequest) (protocol.Worker, error) {
+	var out struct {
+		Agent protocol.Worker `json:"agent"`
+	}
+	if err := c.doJSON(ctx, http.MethodPost, "/v1/agents/enroll", req, http.StatusCreated, &out); err != nil {
+		return protocol.Worker{}, err
+	}
+	return out.Agent, nil
+}
+
+func (c *computeClient) listAgents(ctx context.Context) (agentList, error) {
+	var out agentList
+	if err := c.doJSON(ctx, http.MethodGet, "/v1/agents", nil, http.StatusOK, &out); err != nil {
+		return agentList{}, err
+	}
+	return out, nil
 }
 
 func (c *computeClient) listTasks(ctx context.Context) (taskList, error) {
@@ -104,6 +145,14 @@ func (c *computeClient) findProof(ctx context.Context, taskID string) (protocol.
 		}
 	}
 	return protocol.ProofReceipt{}, false, nil
+}
+
+func (c *computeClient) contributions(ctx context.Context, accountID string) (contributionList, error) {
+	var out contributionList
+	if err := c.doJSON(ctx, http.MethodGet, "/v1/accounts/"+url.PathEscape(accountID)+"/contributions", nil, http.StatusOK, &out); err != nil {
+		return contributionList{}, err
+	}
+	return out, nil
 }
 
 func (c *computeClient) doJSON(ctx context.Context, method, path string, body any, want int, out any) error {

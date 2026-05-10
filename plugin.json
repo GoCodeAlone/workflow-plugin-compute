@@ -14,6 +14,12 @@
     "configProvider": false,
     "moduleTypes": ["compute.provider", "compute.pool"],
     "stepTypes": ["step.compute_dispatch", "step.compute_wait", "step.compute_map"],
-    "triggerTypes": []
+    "triggerTypes": [],
+    "cliCommands": [
+      {
+        "name": "compute",
+        "description": "Operate a workflow-compute control plane"
+      }
+    ]
   }
 }
