@@ -16,6 +16,8 @@ C5: GitHub runner adapter is demo integration, not core plugin assumption.
 C6: wfctl used for validate/build/CI where supported.
 C7: Standalone repo verification uses `GOWORK=off` unless parent `go.work` includes repo.
 C8: `wfctl compute` CLI adapter owns operator UX only; scheduler/ledger/proof semantics stay core.
+C9: External Workflow apps may use plugin outside wfcompute deployment/network if they can reach scoped control-plane client APIs.
+C10: Public client control-plane access ≠ provider/admin mutation ingress.
 
 §I
 
@@ -47,6 +49,8 @@ V13: `wfctl compute run` emits compact receipt only; workload + signature omitte
 V14: `wfctl compute github-runner bridge-job` requires registration id and emits compact receipt only
 V15: `wfctl compute submit` supports command/container-build without leaking workload/signature/token to stdout
 V16: `wfctl compute accounting export` includes raw contribution units and policy reward outputs without leaking token
+V17: docs/examples distinguish `compute.provider` Workflow connection from wfcompute provider/worker node
+V18: plugin guidance for public control-plane use excludes bootstrap token, provider mutation, package/campaign/trust-root mutation, and raw agent/supervisor control APIs
 
 §T
 
@@ -60,6 +64,7 @@ T6|x|implement `wfctl compute` plugin CLI provider + manifest declaration|I.cmd,
 T7|x|add `wfctl compute github-runner` adapter commands for runner register/job bridge|I.cmd,I.wfctl,C5,C8,V10,V12,V14
 T8|x|add `wfctl compute submit command|container-build` for ad hoc workload demos|I.cmd,I.wfctl,C8,V10,V12,V15
 T9|x|include rewards in `wfctl compute accounting export`|I.cmd,I.wfctl,C8,V10,V16
+T10|x|document external Workflow client use cases and public client-surface boundary|C9,C10,V17,V18
 
 §B
 
