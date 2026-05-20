@@ -75,6 +75,52 @@ func TestDispatchStepRejectsUnknownNestedWorkloadConfig(t *testing.T) {
 	}
 }
 
+func TestDispatchStepAcceptsProductCaptureWorkload(t *testing.T) {
+	var got protocol.Task
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/tasks" {
+			t.Fatalf("request: %s %s", r.Method, r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Fatalf("decode task: %v", err)
+		}
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(map[string]any{"task": got})
+	}))
+	defer srv.Close()
+
+	step, err := newDispatchStep("dispatch", productCaptureConfigMap(srv.URL))
+	if err != nil {
+		t.Fatalf("newDispatchStep: %v", err)
+	}
+	result, err := step.Execute(context.Background(), nil, nil, nil, nil, runtimeSecrets())
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if result.StopPipeline {
+		t.Fatalf("unexpected stop: %+v", result.Output)
+	}
+	if got.Workload.Kind != protocol.WorkloadProductCapture || got.Workload.ProductCapture == nil {
+		t.Fatalf("workload: got %+v", got.Workload)
+	}
+	if got.Workload.ProductCapture.URL != "https://www.amazon.com/Microsoft-Xbox-Gaming-Console-video-game/dp/B08H75RTZ8" {
+		t.Fatalf("product url: %+v", got.Workload.ProductCapture)
+	}
+	if got.Workload.ProductCapture.CaptureMode != protocol.ProductCaptureModeBrowser {
+		t.Fatalf("capture mode: %+v", got.Workload.ProductCapture)
+	}
+}
+
+func TestDispatchStepRejectsUnknownNestedProductCaptureConfig(t *testing.T) {
+	cfg := productCaptureConfigMap("https://compute.example.test")
+	workload := cfg["workload"].(map[string]any)
+	productCapture := workload["product_capture"].(map[string]any)
+	productCapture["extra"] = true
+	if _, err := newDispatchStep("dispatch", cfg); err == nil {
+		t.Fatal("expected strict nested product_capture unknown-field error")
+	}
+}
+
 func TestWaitStepReadsTaskStatus(t *testing.T) {
 	var taskCalls int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -723,6 +769,30 @@ func taskConfigMap(id string) map[string]any {
 			},
 		},
 	}
+}
+
+func productCaptureConfigMap(serverURL string) map[string]any {
+	cfg := map[string]any{
+		"id":              "capture-1",
+		"org_id":          "org-1",
+		"pool_id":         "pool-1",
+		"policy_id":       "policy-1",
+		"timeout_seconds": 60,
+		"server_url":      serverURL,
+		"auth_token_ref":  "secret:compute-token",
+		"workload": map[string]any{
+			"kind": "product-capture",
+			"product_capture": map[string]any{
+				"url":             "https://www.amazon.com/Microsoft-Xbox-Gaming-Console-video-game/dp/B08H75RTZ8",
+				"allowed_hosts":   []any{"www.amazon.com"},
+				"capture_mode":    "browser",
+				"timeout_seconds": 45,
+				"max_html_bytes":  10485760,
+				"max_image_count": 6,
+			},
+		},
+	}
+	return cfg
 }
 
 func runtimeSecrets() map[string]any {

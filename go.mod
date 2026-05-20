@@ -6,7 +6,7 @@ toolchain go1.26.2
 
 require (
 	github.com/GoCodeAlone/workflow v0.27.0
-	github.com/GoCodeAlone/workflow-compute v0.0.0-20260520232556-8e112579a8c0
+	github.com/GoCodeAlone/workflow-compute v0.0.0-20260521000401-ae5c20e7b123
 )
 
 require (

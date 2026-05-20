@@ -48,10 +48,8 @@ github.com/GoCodeAlone/modular/modules/eventbus/v2 v2.8.0 h1:buYs0TGNbAZgtTq1Qb+
 github.com/GoCodeAlone/modular/modules/eventbus/v2 v2.8.0/go.mod h1:329flAKmwrPq2JEwu9iltWv6A83H/Di82Xze+kvdKDw=
 github.com/GoCodeAlone/workflow v0.27.0 h1:oufPjwWTuwbZw5PckBEDrIah+w7JJcj51nKQzLe5io0=
 github.com/GoCodeAlone/workflow v0.27.0/go.mod h1:Ue+5YDScTZgtA36q6r/kDaIRxGJFkyxXbeyJVNVJ0Cc=
-github.com/GoCodeAlone/workflow-compute v0.0.0-20260509213854-e62dca3c1662 h1:nC/EvC0w5KQpCVbzxN+d2iBEbmAunp/0qchf3cUENto=
-github.com/GoCodeAlone/workflow-compute v0.0.0-20260509213854-e62dca3c1662/go.mod h1:Loml3Kueb3XI4Nh+CIPR55dUlLXkd/bnfsE3rf/WVlw=
-github.com/GoCodeAlone/workflow-compute v0.0.0-20260520232556-8e112579a8c0 h1:gQC+CIChZZFvUwQ4omKHz+fZ+GscRhZcUyoV641U9C8=
-github.com/GoCodeAlone/workflow-compute v0.0.0-20260520232556-8e112579a8c0/go.mod h1:m1GFY/28DcdOp2ok+tTlvqnJqNYhWk5cwJs/8zUFMh4=
+github.com/GoCodeAlone/workflow-compute v0.0.0-20260521000401-ae5c20e7b123 h1:zZpxqNcU2YRvkZoiQYDyVo/Y7cmDVk6E2Tu2Y0jx+T4=
+github.com/GoCodeAlone/workflow-compute v0.0.0-20260521000401-ae5c20e7b123/go.mod h1:m1GFY/28DcdOp2ok+tTlvqnJqNYhWk5cwJs/8zUFMh4=
 github.com/GoCodeAlone/yaegi v0.17.2 h1:WK6Y6e0t1a6U7r+S2dN3CGWW1PizYD3zO0zneToZPxM=
 github.com/GoCodeAlone/yaegi v0.17.2/go.mod h1:z5Pr6Wse6QJcQvpgxTxzMAevFarH0N37TG88Y9dprx0=
 github.com/GoogleCloudPlatform/opentelemetry-operations-go/detectors/gcp v1.32.0 h1:rIkQfkCOVKc1OiRCNcSDD8ml5RJlZbH/Xsq7lbpynwc=
@@ -285,8 +283,6 @@ github.com/jackc/pgpassfile v1.0.0 h1:/6Hmqy13Ss2zCq62VdNG8tM1wchn8zjSGOBJ6icpsI
 github.com/jackc/pgpassfile v1.0.0/go.mod h1:CEx0iS5ambNFdcRtxPj5JhEz+xB6uRky5eyVu/W2HEg=
 github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 h1:iCEnooe7UlwOQYpKFhBabPMi4aNAfoODPEFNiAnClxo=
 github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761/go.mod h1:5TJZWKEWniPve33vlWYSoGYefn3gLQRzjfDlhSJ9ZKM=
-github.com/jackc/pgx/v5 v5.9.1 h1:uwrxJXBnx76nyISkhr33kQLlUqjv7et7b9FjCen/tdc=
-github.com/jackc/pgx/v5 v5.9.1/go.mod h1:mal1tBGAFfLHvZzaYh77YS/eC6IX9OWbRV1QIIM0Jn4=
 github.com/jackc/pgx/v5 v5.9.2 h1:3ZhOzMWnR4yJ+RW1XImIPsD1aNSz4T4fyP7zlQb56hw=
 github.com/jackc/pgx/v5 v5.9.2/go.mod h1:mal1tBGAFfLHvZzaYh77YS/eC6IX9OWbRV1QIIM0Jn4=
 github.com/jackc/puddle/v2 v2.2.2 h1:PR8nw+E/1w0GLuRFSmiioY6UooMp6KJv0/61nB7icHo=
