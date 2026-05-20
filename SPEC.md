@@ -18,6 +18,7 @@ C7: Standalone repo verification uses `GOWORK=off` unless parent `go.work` inclu
 C8: `wfctl compute` CLI adapter owns operator UX only; scheduler/ledger/proof semantics stay core.
 C9: External Workflow apps may use plugin outside wfcompute deployment/network if they can reach scoped control-plane client APIs.
 C10: Public client control-plane access ≠ provider/admin mutation ingress.
+C11: Plugin provider catalog details track `workflow-compute`'s typed `ProviderContract`, not a parallel plugin-local provider shape.
 
 §I
 
@@ -25,6 +26,7 @@ repo: `workflow-plugin-compute` → Workflow external plugin adapter
 core: `workflow-compute` → scheduler, worker, ledger, proof, reward, dashboard
 module: `compute.provider` → control-plane connection + auth refs
 module: `compute.pool` → org/pool/policy defaults
+module: `compute.provider_catalog` → core `protocol.ProviderContract` declarations
 step: `step.compute_dispatch` → submit task
 step: `step.compute_wait` → wait/read proof
 step: `step.compute_map` → fanout deterministic task set
@@ -51,6 +53,7 @@ V15: `wfctl compute submit` supports command/container-build without leaking wor
 V16: `wfctl compute accounting export` includes raw contribution units and policy reward outputs without leaking token
 V17: docs/examples distinguish `compute.provider` Workflow connection from wfcompute provider/worker node
 V18: plugin guidance for public control-plane use excludes bootstrap token, provider mutation, package/campaign/trust-root mutation, and raw agent/supervisor control APIs
+V19: PR CI checks plugin provider catalog tests against current `GoCodeAlone/workflow-compute` main with a local module replace
 
 §T
 
@@ -65,6 +68,7 @@ T7|x|add `wfctl compute github-runner` adapter commands for runner register/job 
 T8|x|add `wfctl compute submit command|container-build` for ad hoc workload demos|I.cmd,I.wfctl,C8,V10,V12,V15
 T9|x|include rewards in `wfctl compute accounting export`|I.cmd,I.wfctl,C8,V10,V16
 T10|x|document external Workflow client use cases and public client-surface boundary|C9,C10,V17,V18
+T11|x|align provider catalog details with workflow-compute `ProviderContract` and gate drift in PR CI|C11,I.module,V19
 
 §B
 
@@ -77,3 +81,4 @@ B5|2026-05-09|CI exposed `compute_map` timeout test receiving raw context-deadli
 B6|2026-05-10|live `wfctl compute run` task used CLI-specific signature key rejected by core v0 verifier|V11
 B7|2026-05-10|review found token-bearing CLI could post to cleartext non-loopback `http://` server|V12
 B8|2026-05-10|review found `wfctl compute run` stdout included full workload + signature envelope|V13
+B9|2026-05-20|plugin provider catalog draft used grouped executor/dependency/proof/reward/network details while workflow-compute had moved to typed `ProviderContract`; plugin manifest also omitted the new module|C11,V19

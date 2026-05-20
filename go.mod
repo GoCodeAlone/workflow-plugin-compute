@@ -6,7 +6,7 @@ toolchain go1.26.2
 
 require (
 	github.com/GoCodeAlone/workflow v0.27.0
-	github.com/GoCodeAlone/workflow-compute v0.0.0-20260509213854-e62dca3c1662
+	github.com/GoCodeAlone/workflow-compute v0.0.0-20260520232556-8e112579a8c0
 )
 
 require (
@@ -115,7 +115,7 @@ require (
 	github.com/itchyny/timefmt-go v0.1.7 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
-	github.com/jackc/pgx/v5 v5.9.1 // indirect
+	github.com/jackc/pgx/v5 v5.9.2 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	github.com/jcmturner/aescts/v2 v2.0.0 // indirect
 	github.com/jcmturner/dnsutils/v2 v2.0.0 // indirect

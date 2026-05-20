@@ -27,6 +27,7 @@ func (p *computePlugin) ModuleTypes() []string {
 	return []string{
 		"compute.provider",
 		"compute.pool",
+		"compute.provider_catalog",
 	}
 }
 
@@ -36,6 +37,8 @@ func (p *computePlugin) CreateModule(typeName, name string, config map[string]an
 		return newProviderModule(name, config)
 	case "compute.pool":
 		return newPoolModule(name, config)
+	case "compute.provider_catalog":
+		return newProviderCatalogModule(name, config)
 	default:
 		return nil, fmt.Errorf("compute plugin: unknown module type %q", typeName)
 	}
@@ -66,5 +69,6 @@ func (p *computePlugin) ModuleSchemas() []sdk.ModuleSchemaData {
 	return []sdk.ModuleSchemaData{
 		providerModuleSchema(),
 		poolModuleSchema(),
+		providerCatalogModuleSchema(),
 	}
 }

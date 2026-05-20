@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/GoCodeAlone/workflow-compute/pkg/protocol"
 	sdk "github.com/GoCodeAlone/workflow/plugin/external/sdk"
 )
 
@@ -73,12 +74,13 @@ func (m *providerModule) Stop(context.Context) error {
 }
 
 type poolConfig struct {
-	ProviderRef string            `json:"provider_ref"`
-	OrgID       string            `json:"org_id"`
-	PoolID      string            `json:"pool_id"`
-	PolicyID    string            `json:"policy_id"`
-	Mode        string            `json:"mode"`
-	Labels      map[string]string `json:"labels,omitempty"`
+	ProviderRef        string            `json:"provider_ref"`
+	ProviderCatalogRef string            `json:"provider_catalog_ref,omitempty"`
+	OrgID              string            `json:"org_id"`
+	PoolID             string            `json:"pool_id"`
+	PolicyID           string            `json:"policy_id"`
+	Mode               string            `json:"mode"`
+	Labels             map[string]string `json:"labels,omitempty"`
 }
 
 type poolModule struct {
@@ -157,11 +159,74 @@ func poolModuleSchema() sdk.ModuleSchemaData {
 		Category:    "Compute",
 		Description: "Default org, pool, and policy routing for compute tasks.",
 		ConfigFields: []sdk.ConfigField{
-			{Name: "provider_ref", Type: "string", Description: "Name of the compute.provider module.", Required: true},
+			{Name: "provider_ref", Type: "string", Description: "Name of the compute.provider control-plane module.", Required: true},
+			{Name: "provider_catalog_ref", Type: "string", Description: "Optional name of the compute.provider_catalog module that constrains provider policy."},
 			{Name: "org_id", Type: "string", Description: "Organization id for submitted work.", Required: true},
 			{Name: "pool_id", Type: "string", Description: "Pool id for submitted work.", Required: true},
 			{Name: "policy_id", Type: "string", Description: "Policy id for submitted work.", Required: true},
 			{Name: "mode", Type: "string", Description: "Pool mode.", Required: true, Options: []string{"private", "priority", "public"}},
+		},
+	}
+}
+
+type providerCatalogConfig struct {
+	Contracts []protocol.ProviderContract `json:"contracts"`
+}
+
+type providerCatalogModule struct {
+	name   string
+	config providerCatalogConfig
+}
+
+func newProviderCatalogModule(name string, raw map[string]any) (*providerCatalogModule, error) {
+	var cfg providerCatalogConfig
+	if err := decodeStrictMap(raw, &cfg); err != nil {
+		return nil, fmt.Errorf("compute.provider_catalog %q: %w", name, err)
+	}
+	if err := cfg.validate(); err != nil {
+		return nil, fmt.Errorf("compute.provider_catalog %q: %w", name, err)
+	}
+	return &providerCatalogModule{name: name, config: cfg}, nil
+}
+
+func (c providerCatalogConfig) validate() error {
+	var errs []error
+	if len(c.Contracts) == 0 {
+		errs = append(errs, errors.New("contracts is required"))
+	}
+	seen := make(map[string]int, len(c.Contracts))
+	for i, contract := range c.Contracts {
+		if err := contract.Validate(); err != nil {
+			errs = append(errs, fmt.Errorf("contracts[%d]: %w", i, err))
+		}
+		if prior, ok := seen[contract.ID]; ok && contract.ID != "" {
+			errs = append(errs, fmt.Errorf("contracts[%d].id duplicates contracts[%d]", i, prior))
+		}
+		seen[contract.ID] = i
+	}
+	return errors.Join(errs...)
+}
+
+func (m *providerCatalogModule) Init() error {
+	return nil
+}
+
+func (m *providerCatalogModule) Start(context.Context) error {
+	return nil
+}
+
+func (m *providerCatalogModule) Stop(context.Context) error {
+	return nil
+}
+
+func providerCatalogModuleSchema() sdk.ModuleSchemaData {
+	return sdk.ModuleSchemaData{
+		Type:        "compute.provider_catalog",
+		Label:       "Compute Provider Catalog",
+		Category:    "Compute",
+		Description: "Declarative workflow-compute provider contracts validated against the core provider catalog protocol.",
+		ConfigFields: []sdk.ConfigField{
+			{Name: "contracts", Type: "array", Description: "workflow-compute ProviderContract records.", Required: true},
 		},
 	}
 }

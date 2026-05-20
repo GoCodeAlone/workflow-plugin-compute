@@ -32,6 +32,14 @@ jobs:
           sudo mv wfctl /usr/local/bin/wfctl
       - name: Test
         run: GOWORK=off go test ./...
+      - name: Checkout workflow-compute for provider alignment
+        uses: actions/checkout@v4
+        with:
+          repository: GoCodeAlone/workflow-compute
+          token: ${{ secrets.RELEASES_TOKEN }}
+          path: workflow-compute
+      - name: Check workflow-compute provider alignment
+        run: scripts/check-workflow-compute-alignment.sh "$GITHUB_WORKSPACE/workflow-compute"
       - name: Validate workflow config
         run: wfctl validate workflow.yaml
       - name: Build with wfctl
