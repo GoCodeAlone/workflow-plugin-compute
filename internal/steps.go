@@ -15,6 +15,9 @@ type connectionConfig struct {
 	ServerURL      string `json:"server_url"`
 	AuthTokenRef   string `json:"auth_token_ref"`
 	RequestTimeout string `json:"request_timeout,omitempty"`
+	// ConfigDir is injected by Workflow for local path resolution. Compute steps
+	// accept it for strict decoding but do not read from local app files.
+	ConfigDir string `json:"_config_dir,omitempty"`
 }
 
 func (c connectionConfig) validate() error {
