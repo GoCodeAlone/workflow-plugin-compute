@@ -232,6 +232,17 @@ func TestProductCaptureStepRejectsUnknownConfig(t *testing.T) {
 	}
 }
 
+func TestProductCaptureStepAcceptsWorkflowInternalConfigDir(t *testing.T) {
+	cfg := productCaptureConfigMap("https://compute.example.test")
+	cfg["url_field"] = "url"
+	cfg["allowed_hosts"] = []any{"www.amazon.com"}
+	cfg["_config_dir"] = "/app"
+	delete(cfg, "workload")
+	if _, err := newProductCaptureStep("capture", cfg); err != nil {
+		t.Fatalf("expected Workflow-injected _config_dir to be accepted: %v", err)
+	}
+}
+
 func TestWaitStepReadsTaskStatus(t *testing.T) {
 	var taskCalls int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

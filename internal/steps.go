@@ -15,6 +15,7 @@ type connectionConfig struct {
 	ServerURL      string `json:"server_url"`
 	AuthTokenRef   string `json:"auth_token_ref"`
 	RequestTimeout string `json:"request_timeout,omitempty"`
+	ConfigDir      string `json:"_config_dir,omitempty"`
 }
 
 func (c connectionConfig) validate() error {
