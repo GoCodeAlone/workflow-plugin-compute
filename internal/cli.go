@@ -294,6 +294,13 @@ func (c *computeCLI) runSubmitProductCapture(ctx context.Context, args []string)
 	maxHTMLBytes := fs.Int64("max-html-bytes", protocol.MaxProductCaptureHTMLBytes, "maximum captured HTML bytes")
 	maxImageCount := fs.Int("max-image-count", 8, "maximum product images to return")
 	metadataOnly := fs.Bool("metadata-only", false, "request metadata-only extraction when supported")
+	productID := fs.String("product", "", "network product id for dynamic product-capture provider routing")
+	providerPluginID := fs.String("provider-plugin", "workflow-plugin-product-capture", "provider plugin id")
+	providerID := fs.String("provider-id", "browser", "provider id")
+	providerContractID := fs.String("provider-contract", "product-capture.browser.v1", "provider contract id")
+	providerVersion := fs.String("provider-version", "v1.0.0", "provider contract version")
+	providerConfigRef := fs.String("provider-config-ref", "", "provider config ref")
+	providerOperation := fs.String("provider-operation", "capture_product", "provider operation")
 	fs.Var(&allowedHosts, "allowed-host", "allowed URL host; repeatable or comma-separated")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -301,16 +308,37 @@ func (c *computeCLI) runSubmitProductCapture(ctx context.Context, args []string)
 	if err := taskFlags.validate(); err != nil {
 		return err
 	}
+	if *productID == "" {
+		return errors.New("--product is required")
+	}
+	if *providerConfigRef == "" {
+		*providerConfigRef = "config://network-products/" + *productID + "/browser"
+	}
+	input := productCaptureProviderInput{
+		URL:            *productURL,
+		AllowedHosts:   allowedHosts.values(),
+		CaptureMode:    *captureMode,
+		TimeoutSeconds: *captureTimeout,
+		MaxHTMLBytes:   *maxHTMLBytes,
+		MaxImageCount:  *maxImageCount,
+		MetadataOnly:   *metadataOnly,
+	}
+	inputBytes, err := json.Marshal(input)
+	if err != nil {
+		return err
+	}
 	workload := protocol.WorkloadSpec{
-		Kind: protocol.WorkloadProductCapture,
-		ProductCapture: &protocol.ProductCaptureWorkload{
-			URL:            *productURL,
-			AllowedHosts:   allowedHosts.values(),
-			CaptureMode:    protocol.ProductCaptureMode(*captureMode),
-			TimeoutSeconds: *captureTimeout,
-			MaxHTMLBytes:   *maxHTMLBytes,
-			MaxImageCount:  *maxImageCount,
-			MetadataOnly:   *metadataOnly,
+		Kind: protocol.WorkloadProvider,
+		Provider: &protocol.ProviderWorkload{
+			ProviderConfig: protocol.ProviderConfig{
+				PluginID:   *providerPluginID,
+				ProviderID: *providerID,
+				ContractID: *providerContractID,
+				Version:    *providerVersion,
+				ConfigRef:  *providerConfigRef,
+			},
+			Operation: *providerOperation,
+			Input:     inputBytes,
 		},
 	}
 	if err := workload.Validate(); err != nil {
@@ -320,7 +348,9 @@ func (c *computeCLI) runSubmitProductCapture(ctx context.Context, args []string)
 	if err != nil {
 		return err
 	}
-	return c.writeTaskReceipt(ctx, client, taskFlags.task(workload))
+	task := taskFlags.task(workload)
+	task.ProductID = *productID
+	return c.writeTaskReceipt(ctx, client, task)
 }
 
 func (c *computeCLI) writeTaskReceipt(ctx context.Context, client *computeClient, task protocol.Task) error {

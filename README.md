@@ -102,9 +102,10 @@ step submits every task, polls the core task/proof APIs, and stops the Workflow
 pipeline if any task fails, stalls, times out, or produces a non-accepted proof.
 
 For product capture, use `step.compute_product_capture`. It requires explicit
-`allowed_hosts`, accepts either a static `url` or dynamic `url_field`, submits a
-typed `product-capture` workload, waits for proof, and exposes the bounded
-`result_preview` fields returned by workflow-compute.
+`allowed_hosts`, `product_id`, and either a static `url` or dynamic `url_field`.
+The step submits generic `provider` work using the
+`workflow-plugin-product-capture` browser contract, waits for proof, and exposes
+the bounded `result_preview` fields returned by workflow-compute.
 
 ## Development
 

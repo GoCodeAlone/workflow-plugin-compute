@@ -2,6 +2,7 @@ package internal
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -56,6 +57,7 @@ func (c connectionConfig) client(ctx context.Context, metadata, runtimeConfig ma
 
 type taskConfig struct {
 	ID             string            `json:"id,omitempty"`
+	ProductID      string            `json:"product_id,omitempty"`
 	OrgID          string            `json:"org_id"`
 	PoolID         string            `json:"pool_id"`
 	PolicyID       string            `json:"policy_id"`
@@ -288,6 +290,13 @@ func newMapStep(name string, raw map[string]any) (*mapStep, error) {
 type productCaptureStepConfig struct {
 	connectionConfig
 	taskConfig
+	ProviderPluginID      string   `json:"provider_plugin_id,omitempty"`
+	ProviderID            string   `json:"provider_id,omitempty"`
+	ProviderContractID    string   `json:"provider_contract_id,omitempty"`
+	ProviderVersion       string   `json:"provider_version,omitempty"`
+	ProviderConfigRef     string   `json:"provider_config_ref,omitempty"`
+	ProviderConfigDigest  string   `json:"provider_config_digest,omitempty"`
+	ProviderOperation     string   `json:"provider_operation,omitempty"`
 	URL                   string   `json:"url,omitempty"`
 	URLField              string   `json:"url_field,omitempty"`
 	AllowedHosts          []string `json:"allowed_hosts"`
@@ -313,6 +322,9 @@ func newProductCaptureStep(name string, raw map[string]any) (*productCaptureStep
 	}
 	if err := errors.Join(cfg.connectionConfig.validate(), cfg.taskConfig.validate()); err != nil {
 		return nil, fmt.Errorf("step.compute_product_capture %q: %w", name, err)
+	}
+	if cfg.ProductID == "" {
+		return nil, fmt.Errorf("step.compute_product_capture %q: product_id is required", name)
 	}
 	if cfg.URL == "" && cfg.URLField == "" {
 		return nil, fmt.Errorf("step.compute_product_capture %q: url or url_field is required", name)
@@ -350,20 +362,29 @@ func (s *productCaptureStep) Execute(ctx context.Context, _ map[string]any, _ ma
 	if err != nil {
 		return errorResult(err.Error()), nil
 	}
-	workload := protocol.WorkloadSpec{
-		Kind: protocol.WorkloadProductCapture,
-		ProductCapture: &protocol.ProductCaptureWorkload{
-			URL:            url,
-			AllowedHosts:   append([]string(nil), s.config.AllowedHosts...),
-			CaptureMode:    protocol.ProductCaptureMode(s.config.CaptureMode),
-			TimeoutSeconds: s.config.CaptureTimeoutSeconds,
-			MaxHTMLBytes:   s.config.MaxHTMLBytes,
-			MaxImageCount:  s.config.MaxImageCount,
-			MetadataOnly:   s.config.MetadataOnly,
-		},
+	input := productCaptureProviderInput{
+		URL:            url,
+		AllowedHosts:   append([]string(nil), s.config.AllowedHosts...),
+		CaptureMode:    s.config.CaptureMode,
+		TimeoutSeconds: s.config.CaptureTimeoutSeconds,
+		MaxHTMLBytes:   s.config.MaxHTMLBytes,
+		MaxImageCount:  s.config.MaxImageCount,
+		MetadataOnly:   s.config.MetadataOnly,
 	}
-	if workload.ProductCapture.CaptureMode == "" {
-		workload.ProductCapture.CaptureMode = protocol.ProductCaptureModeBrowser
+	if input.CaptureMode == "" {
+		input.CaptureMode = string(protocol.ProductCaptureModeBrowser)
+	}
+	inputBytes, err := json.Marshal(input)
+	if err != nil {
+		return errorResult(err.Error()), nil
+	}
+	workload := protocol.WorkloadSpec{
+		Kind: protocol.WorkloadProvider,
+		Provider: &protocol.ProviderWorkload{
+			ProviderConfig: s.productCaptureProviderConfig(),
+			Operation:      s.productCaptureProviderOperation(),
+			Input:          inputBytes,
+		},
 	}
 	if err := workload.Validate(); err != nil {
 		return errorResult(err.Error()), nil
@@ -380,6 +401,42 @@ func (s *productCaptureStep) Execute(ctx context.Context, _ map[string]any, _ ma
 		return &sdk.StepResult{StopPipeline: true, Output: output}, nil
 	}
 	return &sdk.StepResult{Output: output}, nil
+}
+
+type productCaptureProviderInput struct {
+	URL            string   `json:"url"`
+	AllowedHosts   []string `json:"allowed_hosts"`
+	CaptureMode    string   `json:"capture_mode,omitempty"`
+	TimeoutSeconds int      `json:"timeout_seconds,omitempty"`
+	MaxHTMLBytes   int64    `json:"max_html_bytes,omitempty"`
+	MaxImageCount  int      `json:"max_image_count,omitempty"`
+	MetadataOnly   bool     `json:"metadata_only,omitempty"`
+}
+
+func (s *productCaptureStep) productCaptureProviderConfig() protocol.ProviderConfig {
+	cfg := protocol.ProviderConfig{
+		PluginID:     defaultString(s.config.ProviderPluginID, "workflow-plugin-product-capture"),
+		ProviderID:   defaultString(s.config.ProviderID, "browser"),
+		ContractID:   defaultString(s.config.ProviderContractID, "product-capture.browser.v1"),
+		Version:      defaultString(s.config.ProviderVersion, "v1.0.0"),
+		ConfigRef:    s.config.ProviderConfigRef,
+		ConfigDigest: s.config.ProviderConfigDigest,
+	}
+	if cfg.ConfigRef == "" {
+		cfg.ConfigRef = "config://network-products/" + s.config.ProductID + "/browser"
+	}
+	return cfg
+}
+
+func (s *productCaptureStep) productCaptureProviderOperation() string {
+	return defaultString(s.config.ProviderOperation, "capture_product")
+}
+
+func defaultString(value, fallback string) string {
+	if value == "" {
+		return fallback
+	}
+	return value
 }
 
 func (s *productCaptureStep) waitForProductCapture(ctx context.Context, client *computeClient, taskID string) (map[string]any, error) {
