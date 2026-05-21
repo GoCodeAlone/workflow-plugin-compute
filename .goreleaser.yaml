@@ -17,10 +17,14 @@ builds:
     goos:
       - linux
       - darwin
-      - windows
     goarch:
       - amd64
       - arm64
+    ignore:
+      - goos: linux
+        goarch: arm64
+      - goos: darwin
+        goarch: amd64
     ldflags:
       - -s -w -X github.com/GoCodeAlone/workflow-plugin-compute/internal.Version={{.Version}}
 
