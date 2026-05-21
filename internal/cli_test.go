@@ -149,6 +149,52 @@ func TestT8_CLISubmitContainerBuild(t *testing.T) {
 	}
 }
 
+func TestV739_CLISubmitProductCapture(t *testing.T) {
+	var got protocol.Task
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/tasks" {
+			t.Fatalf("request: %s %s", r.Method, r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Fatalf("decode task: %v", err)
+		}
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(map[string]any{"task": got})
+	}))
+	defer srv.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := newCLI(&stdout, &stderr).RunCLI([]string{
+		"compute", "submit", "product-capture",
+		"--server", srv.URL,
+		"--token", "token",
+		"--id", "capture-1",
+		"--org", "org-1",
+		"--pool", "pool-1",
+		"--url", "https://www.amazon.com/Microsoft-Xbox-Gaming-Console-video-game/dp/B08H75RTZ8",
+		"--allowed-host", "www.amazon.com",
+		"--capture-mode", "browser",
+		"--capture-timeout", "45",
+		"--max-html-bytes", "10485760",
+		"--max-image-count", "6",
+	})
+
+	if code != 0 {
+		t.Fatalf("RunCLI code=%d stderr=%s", code, stderr.String())
+	}
+	if got.Workload.Kind != protocol.WorkloadProductCapture || got.Workload.ProductCapture == nil {
+		t.Fatalf("task: got %+v", got)
+	}
+	if got.Workload.ProductCapture.AllowedHosts[0] != "www.amazon.com" {
+		t.Fatalf("allowed hosts: %+v", got.Workload.ProductCapture)
+	}
+	for _, forbidden := range [][]byte{[]byte("token"), []byte("signature"), []byte("workload"), []byte("amazon.com")} {
+		if bytes.Contains(stdout.Bytes(), forbidden) {
+			t.Fatalf("stdout leaked %q: %s", forbidden, stdout.String())
+		}
+	}
+}
+
 func TestT8_CLISubmitValidatesBeforeAPICall(t *testing.T) {
 	var calls int
 	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {

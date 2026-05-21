@@ -197,13 +197,15 @@ func (c *computeCLI) runRun(ctx context.Context, args []string) error {
 
 func (c *computeCLI) runSubmit(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: wfctl compute submit <command|container-build>")
+		return errors.New("usage: wfctl compute submit <command|container-build|product-capture>")
 	}
 	switch args[0] {
 	case "command":
 		return c.runSubmitCommand(ctx, args[1:])
 	case "container-build":
 		return c.runSubmitContainerBuild(ctx, args[1:])
+	case "product-capture":
+		return c.runSubmitProductCapture(ctx, args[1:])
 	default:
 		return fmt.Errorf("unknown wfctl compute submit workload %q", args[0])
 	}
@@ -279,6 +281,46 @@ func (c *computeCLI) runSubmitContainerBuild(ctx context.Context, args []string)
 		},
 	})
 	return c.writeTaskReceipt(ctx, client, task)
+}
+
+func (c *computeCLI) runSubmitProductCapture(ctx context.Context, args []string) error {
+	fs := c.newFlagSet("compute submit product-capture")
+	common := addCLICommonFlags(fs)
+	taskFlags := addCLITaskFlags(fs)
+	productURL := fs.String("url", "", "supported product URL")
+	allowedHosts := csvFlag{}
+	captureMode := fs.String("capture-mode", string(protocol.ProductCaptureModeBrowser), "capture mode")
+	captureTimeout := fs.Int("capture-timeout", 45, "capture timeout seconds")
+	maxHTMLBytes := fs.Int64("max-html-bytes", protocol.MaxProductCaptureHTMLBytes, "maximum captured HTML bytes")
+	maxImageCount := fs.Int("max-image-count", 8, "maximum product images to return")
+	metadataOnly := fs.Bool("metadata-only", false, "request metadata-only extraction when supported")
+	fs.Var(&allowedHosts, "allowed-host", "allowed URL host; repeatable or comma-separated")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if err := taskFlags.validate(); err != nil {
+		return err
+	}
+	workload := protocol.WorkloadSpec{
+		Kind: protocol.WorkloadProductCapture,
+		ProductCapture: &protocol.ProductCaptureWorkload{
+			URL:            *productURL,
+			AllowedHosts:   allowedHosts.values(),
+			CaptureMode:    protocol.ProductCaptureMode(*captureMode),
+			TimeoutSeconds: *captureTimeout,
+			MaxHTMLBytes:   *maxHTMLBytes,
+			MaxImageCount:  *maxImageCount,
+			MetadataOnly:   *metadataOnly,
+		},
+	}
+	if err := workload.Validate(); err != nil {
+		return err
+	}
+	client, err := common.client()
+	if err != nil {
+		return err
+	}
+	return c.writeTaskReceipt(ctx, client, taskFlags.task(workload))
 }
 
 func (c *computeCLI) writeTaskReceipt(ctx context.Context, client *computeClient, task protocol.Task) error {
