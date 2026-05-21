@@ -21,17 +21,20 @@ jobs:
           cache: true
       - name: Configure private Go modules
         env:
-          RELEASES_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+          RELEASES_TOKEN: ${{ secrets.RELEASES_TOKEN || github.token }}
         run: |
           git config --global url."https://x-access-token:${RELEASES_TOKEN}@github.com/GoCodeAlone/".insteadOf "https://github.com/GoCodeAlone/"
           go env -w GOPRIVATE=github.com/GoCodeAlone/*
+          go env -w GONOSUMDB=github.com/GoCodeAlone/*
       - name: Install wfctl
         run: |
           curl -fsSL -o wfctl https://github.com/GoCodeAlone/workflow/releases/download/v0.27.0/wfctl-linux-amd64
           chmod +x wfctl
           sudo mv wfctl /usr/local/bin/wfctl
       - name: Test
-        run: GOWORK=off go test ./...
+        env:
+          GIT_TERMINAL_PROMPT: "0"
+        run: GOWORK=off go test -timeout 2m ./...
       - name: Checkout workflow-compute for provider alignment
         uses: actions/checkout@v4
         with:

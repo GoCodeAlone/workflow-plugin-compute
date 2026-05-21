@@ -27,6 +27,9 @@ Examples:
 - A data or game build workflow submits a long-running command workload to
   eligible enrolled agents, records the resulting task/proof ids, and uses the
   core ledger for accounting.
+- A commerce workflow submits a typed product-capture URL workload to an
+  enrolled browser-capture pool and uses the accepted proof preview to show a
+  user-confirmed product snapshot.
 
 `compute.provider` in this repository means "Workflow connection to a
 wfcompute control plane." It is not a wfcompute worker/provider node. Provider
@@ -97,6 +100,11 @@ steps:
 For fanout work, use `step.compute_map` with a deterministic `tasks` list. The
 step submits every task, polls the core task/proof APIs, and stops the Workflow
 pipeline if any task fails, stalls, times out, or produces a non-accepted proof.
+
+For product capture, use `step.compute_product_capture`. It requires explicit
+`allowed_hosts`, accepts either a static `url` or dynamic `url_field`, submits a
+typed `product-capture` workload, waits for proof, and exposes the bounded
+`result_preview` fields returned by workflow-compute.
 
 ## Development
 
