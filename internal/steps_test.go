@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/GoCodeAlone/workflow-compute/pkg/protocol"
@@ -13,8 +16,28 @@ import (
 func TestStepTypes(t *testing.T) {
 	steps := NewPlugin().(interface{ StepTypes() []string })
 	got := steps.StepTypes()
-	if len(got) != 3 || got[0] != "step.compute_dispatch" || got[2] != "step.compute_map" {
+	want := []string{"step.compute_dispatch", "step.compute_wait", "step.compute_map", "step.compute_product_capture"}
+	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("step types: got %#v", got)
+	}
+}
+
+func TestPluginManifestStepTypesMatchRuntime(t *testing.T) {
+	data, err := os.ReadFile("../plugin.json")
+	if err != nil {
+		t.Fatalf("read plugin manifest: %v", err)
+	}
+	var manifest struct {
+		Capabilities struct {
+			StepTypes []string `json:"stepTypes"`
+		} `json:"capabilities"`
+	}
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		t.Fatalf("decode plugin manifest: %v", err)
+	}
+	steps := NewPlugin().(interface{ StepTypes() []string })
+	if strings.Join(manifest.Capabilities.StepTypes, ",") != strings.Join(steps.StepTypes(), ",") {
+		t.Fatalf("manifest step types %v do not match runtime %v", manifest.Capabilities.StepTypes, steps.StepTypes())
 	}
 }
 
@@ -118,6 +141,94 @@ func TestDispatchStepRejectsUnknownNestedProductCaptureConfig(t *testing.T) {
 	productCapture["extra"] = true
 	if _, err := newDispatchStep("dispatch", cfg); err == nil {
 		t.Fatal("expected strict nested product_capture unknown-field error")
+	}
+}
+
+func TestProductCaptureStepDispatchesDynamicURLAndReturnsPreview(t *testing.T) {
+	var submitted protocol.Task
+	var taskCalls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/tasks":
+			if err := json.NewDecoder(r.Body).Decode(&submitted); err != nil {
+				t.Fatalf("decode task: %v", err)
+			}
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(map[string]any{"task": submitted})
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/tasks":
+			taskCalls++
+			status := protocol.TaskQueued
+			if taskCalls > 1 {
+				status = protocol.TaskSucceeded
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"tasks": []protocol.Task{{
+				ID:     submitted.ID,
+				OrgID:  submitted.OrgID,
+				PoolID: submitted.PoolID,
+				Status: status,
+			}}, "stalls": []any{}})
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/proofs":
+			proof := proofReceipt(submitted.ID)
+			proof.ResultPreview = map[string]any{
+				"title":          "Xbox Series X",
+				"seller":         "Sole Providers",
+				"prime_eligible": false,
+				"error":          "diagnostic only",
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"proofs": []protocol.ProofReceipt{proof}})
+		default:
+			t.Fatalf("request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	step, err := newProductCaptureStep("capture", map[string]any{
+		"server_url":              srv.URL,
+		"auth_token_ref":          "secret:compute-token",
+		"id":                      "capture-1",
+		"org_id":                  "org-1",
+		"pool_id":                 "pool-1",
+		"policy_id":               "policy-1",
+		"timeout_seconds":         90,
+		"url_field":               "url",
+		"allowed_hosts":           []any{"www.amazon.com", "amazon.com"},
+		"capture_timeout_seconds": 45,
+		"max_html_bytes":          1 << 20,
+		"max_image_count":         8,
+		"poll_interval":           "1ms",
+		"wait_timeout":            "100ms",
+	})
+	if err != nil {
+		t.Fatalf("newProductCaptureStep: %v", err)
+	}
+	result, err := step.Execute(context.Background(), nil, nil, map[string]any{
+		"url": "https://www.amazon.com/dp/B0DL7CKRJ5?th=1",
+	}, nil, runtimeSecrets())
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if result.StopPipeline {
+		t.Fatalf("unexpected stop: %+v", result.Output)
+	}
+	if submitted.Workload.Kind != protocol.WorkloadProductCapture || submitted.Workload.ProductCapture.URL != "https://www.amazon.com/dp/B0DL7CKRJ5?th=1" {
+		t.Fatalf("submitted workload: %+v", submitted.Workload)
+	}
+	if result.Output["title"] != "Xbox Series X" || result.Output["seller"] != "Sole Providers" || result.Output["prime_eligible"] != false {
+		t.Fatalf("preview output: %+v", result.Output)
+	}
+	if result.Output["error"] != nil {
+		t.Fatalf("preview error key should not be promoted: %+v", result.Output)
+	}
+}
+
+func TestProductCaptureStepRejectsUnknownConfig(t *testing.T) {
+	cfg := productCaptureConfigMap("https://compute.example.test")
+	cfg["url_field"] = "url"
+	cfg["allowed_hosts"] = []any{"www.amazon.com"}
+	cfg["unknown"] = true
+	delete(cfg, "workload")
+	if _, err := newProductCaptureStep("capture", cfg); err == nil {
+		t.Fatal("expected strict unknown-field error")
 	}
 }
 

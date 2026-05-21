@@ -13,7 +13,7 @@
   "capabilities": {
     "configProvider": false,
     "moduleTypes": ["compute.provider", "compute.pool", "compute.provider_catalog"],
-    "stepTypes": ["step.compute_dispatch", "step.compute_wait", "step.compute_map"],
+    "stepTypes": ["step.compute_dispatch", "step.compute_wait", "step.compute_map", "step.compute_product_capture"],
     "triggerTypes": [],
     "cliCommands": [
       {

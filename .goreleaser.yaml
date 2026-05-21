@@ -26,7 +26,7 @@ builds:
 
 archives:
   - id: workflow-plugin-compute
-    builds:
+    ids:
       - workflow-plugin-compute
     name_template: "{{ .ProjectName }}-{{ .Os }}-{{ .Arch }}"
     files:

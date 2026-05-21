@@ -19,6 +19,7 @@ C8: `wfctl compute` CLI adapter owns operator UX only; scheduler/ledger/proof se
 C9: External Workflow apps may use plugin outside wfcompute deployment/network if they can reach scoped control-plane client APIs.
 C10: Public client control-plane access ≠ provider/admin mutation ingress.
 C11: Plugin provider catalog details track `workflow-compute`'s typed `ProviderContract`, not a parallel plugin-local provider shape.
+C12: Product capture is a typed workflow-compute workload; Workflow apps use this plugin to submit/wait, not command-workload shims.
 
 §I
 
@@ -30,6 +31,7 @@ module: `compute.provider_catalog` → core `protocol.ProviderContract` declarat
 step: `step.compute_dispatch` → submit task
 step: `step.compute_wait` → wait/read proof
 step: `step.compute_map` → fanout deterministic task set
+step: `step.compute_product_capture` → submit typed product-capture URL workload, wait for accepted proof, expose bounded `result_preview`
 cmd: `workflow-plugin-compute` → external SDK entrypoint
 wfctl: `wfctl compute enroll|pools|run|submit|audit|accounting export|github-runner register|github-runner bridge-job` → plugin CLI → core API
 
@@ -54,6 +56,8 @@ V16: `wfctl compute accounting export` includes raw contribution units and polic
 V17: docs/examples distinguish `compute.provider` Workflow connection from wfcompute provider/worker node
 V18: plugin guidance for public control-plane use excludes bootstrap token, provider mutation, package/campaign/trust-root mutation, and raw agent/supervisor control APIs
 V19: PR CI checks plugin provider catalog tests against current `GoCodeAlone/workflow-compute` main with a local module replace
+V20: manifest `stepTypes` exactly match runtime `StepTypes`
+V21: `step.compute_product_capture` requires explicit `allowed_hosts`, supports dynamic `url_field`, and returns only task/proof ids plus bounded preview fields
 
 §T
 
@@ -69,6 +73,7 @@ T8|x|add `wfctl compute submit command|container-build` for ad hoc workload demo
 T9|x|include rewards in `wfctl compute accounting export`|I.cmd,I.wfctl,C8,V10,V16
 T10|x|document external Workflow client use cases and public client-surface boundary|C9,C10,V17,V18
 T11|x|align provider catalog details with workflow-compute `ProviderContract` and gate drift in PR CI|C11,I.module,V19
+T12|x|add `step.compute_product_capture` typed workload submit/wait and preview output|C12,I.step,V2,V4,V20,V21
 
 §B
 
@@ -82,3 +87,4 @@ B6|2026-05-10|live `wfctl compute run` task used CLI-specific signature key reje
 B7|2026-05-10|review found token-bearing CLI could post to cleartext non-loopback `http://` server|V12
 B8|2026-05-10|review found `wfctl compute run` stdout included full workload + signature envelope|V13
 B9|2026-05-20|plugin provider catalog draft used grouped executor/dependency/proof/reward/network details while workflow-compute had moved to typed `ProviderContract`; plugin manifest also omitted the new module|C11,V19
+B10|2026-05-20|runtime step list gained product capture while manifest/docs could drift|V20
