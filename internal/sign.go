@@ -18,6 +18,7 @@ func buildTask(cfg taskConfig, workload protocol.WorkloadSpec) protocol.Task {
 	return protocol.Task{
 		ProtocolVersion: protocol.Version,
 		ID:              id,
+		ProductID:       cfg.ProductID,
 		OrgID:           cfg.OrgID,
 		PoolID:          cfg.PoolID,
 		PolicyID:        cfg.PolicyID,

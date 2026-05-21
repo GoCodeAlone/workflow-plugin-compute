@@ -169,6 +169,7 @@ func TestV739_CLISubmitProductCapture(t *testing.T) {
 		"--server", srv.URL,
 		"--token", "token",
 		"--id", "capture-1",
+		"--product", "bmw-product-capture",
 		"--org", "org-1",
 		"--pool", "pool-1",
 		"--url", "https://www.amazon.com/Microsoft-Xbox-Gaming-Console-video-game/dp/B08H75RTZ8",
@@ -182,11 +183,20 @@ func TestV739_CLISubmitProductCapture(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("RunCLI code=%d stderr=%s", code, stderr.String())
 	}
-	if got.Workload.Kind != protocol.WorkloadProductCapture || got.Workload.ProductCapture == nil {
+	if got.ProductID != "bmw-product-capture" {
+		t.Fatalf("product id: got %+v", got)
+	}
+	if got.Workload.Kind != protocol.WorkloadProvider || got.Workload.Provider == nil {
 		t.Fatalf("task: got %+v", got)
 	}
-	if got.Workload.ProductCapture.AllowedHosts[0] != "www.amazon.com" {
-		t.Fatalf("allowed hosts: %+v", got.Workload.ProductCapture)
+	if got.Workload.Provider.ProviderConfig.PluginID != "workflow-plugin-product-capture" ||
+		got.Workload.Provider.ProviderConfig.ProviderID != "browser" ||
+		got.Workload.Provider.ProviderConfig.ContractID != "product-capture.browser.v1" ||
+		got.Workload.Provider.Operation != "capture_product" {
+		t.Fatalf("provider task: %+v", got.Workload.Provider)
+	}
+	if !bytes.Contains(got.Workload.Provider.Input, []byte(`"allowed_hosts":["www.amazon.com"]`)) {
+		t.Fatalf("provider input: %s", got.Workload.Provider.Input)
 	}
 	for _, forbidden := range [][]byte{[]byte("token"), []byte("signature"), []byte("workload"), []byte("amazon.com")} {
 		if bytes.Contains(stdout.Bytes(), forbidden) {

@@ -98,7 +98,7 @@ func TestDispatchStepRejectsUnknownNestedWorkloadConfig(t *testing.T) {
 	}
 }
 
-func TestDispatchStepAcceptsProductCaptureWorkload(t *testing.T) {
+func TestDispatchStepAcceptsProviderWorkload(t *testing.T) {
 	var got protocol.Task
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.URL.Path != "/v1/tasks" {
@@ -123,24 +123,30 @@ func TestDispatchStepAcceptsProductCaptureWorkload(t *testing.T) {
 	if result.StopPipeline {
 		t.Fatalf("unexpected stop: %+v", result.Output)
 	}
-	if got.Workload.Kind != protocol.WorkloadProductCapture || got.Workload.ProductCapture == nil {
+	if got.ProductID != "bmw-product-capture" {
+		t.Fatalf("product id: got %+v", got)
+	}
+	if got.Workload.Kind != protocol.WorkloadProvider || got.Workload.Provider == nil {
 		t.Fatalf("workload: got %+v", got.Workload)
 	}
-	if got.Workload.ProductCapture.URL != "https://www.amazon.com/Microsoft-Xbox-Gaming-Console-video-game/dp/B08H75RTZ8" {
-		t.Fatalf("product url: %+v", got.Workload.ProductCapture)
+	if got.Workload.Provider.ProviderConfig != productCaptureProviderConfig("bmw-product-capture") {
+		t.Fatalf("provider config: %+v", got.Workload.Provider.ProviderConfig)
 	}
-	if got.Workload.ProductCapture.CaptureMode != protocol.ProductCaptureModeBrowser {
-		t.Fatalf("capture mode: %+v", got.Workload.ProductCapture)
+	if got.Workload.Provider.Operation != "capture_product" {
+		t.Fatalf("operation: %q", got.Workload.Provider.Operation)
+	}
+	if !strings.Contains(string(got.Workload.Provider.Input), `"url":"https://www.amazon.com/Microsoft-Xbox-Gaming-Console-video-game/dp/B08H75RTZ8"`) {
+		t.Fatalf("provider input: %s", got.Workload.Provider.Input)
 	}
 }
 
-func TestDispatchStepRejectsUnknownNestedProductCaptureConfig(t *testing.T) {
+func TestDispatchStepRejectsUnknownNestedProviderConfig(t *testing.T) {
 	cfg := productCaptureConfigMap("https://compute.example.test")
 	workload := cfg["workload"].(map[string]any)
-	productCapture := workload["product_capture"].(map[string]any)
-	productCapture["extra"] = true
+	provider := workload["provider"].(map[string]any)
+	provider["extra"] = true
 	if _, err := newDispatchStep("dispatch", cfg); err == nil {
-		t.Fatal("expected strict nested product_capture unknown-field error")
+		t.Fatal("expected strict nested provider unknown-field error")
 	}
 }
 
@@ -186,6 +192,7 @@ func TestProductCaptureStepDispatchesDynamicURLAndReturnsPreview(t *testing.T) {
 		"server_url":              srv.URL,
 		"auth_token_ref":          "secret:compute-token",
 		"id":                      "capture-1",
+		"product_id":              "bmw-product-capture",
 		"org_id":                  "org-1",
 		"pool_id":                 "pool-1",
 		"policy_id":               "policy-1",
@@ -210,8 +217,20 @@ func TestProductCaptureStepDispatchesDynamicURLAndReturnsPreview(t *testing.T) {
 	if result.StopPipeline {
 		t.Fatalf("unexpected stop: %+v", result.Output)
 	}
-	if submitted.Workload.Kind != protocol.WorkloadProductCapture || submitted.Workload.ProductCapture.URL != "https://www.amazon.com/dp/B0DL7CKRJ5?th=1" {
+	if submitted.ProductID != "bmw-product-capture" {
+		t.Fatalf("submitted product id: %+v", submitted)
+	}
+	if submitted.Workload.Kind != protocol.WorkloadProvider || submitted.Workload.Provider == nil {
 		t.Fatalf("submitted workload: %+v", submitted.Workload)
+	}
+	if submitted.Workload.Provider.ProviderConfig != productCaptureProviderConfig("bmw-product-capture") {
+		t.Fatalf("provider config: %+v", submitted.Workload.Provider.ProviderConfig)
+	}
+	if submitted.Workload.Provider.Operation != "capture_product" {
+		t.Fatalf("operation: %q", submitted.Workload.Provider.Operation)
+	}
+	if !strings.Contains(string(submitted.Workload.Provider.Input), `"url":"https://www.amazon.com/dp/B0DL7CKRJ5?th=1"`) {
+		t.Fatalf("provider input: %s", submitted.Workload.Provider.Input)
 	}
 	if result.Output["title"] != "Xbox Series X" || result.Output["seller"] != "Sole Providers" || result.Output["prime_eligible"] != false {
 		t.Fatalf("preview output: %+v", result.Output)
@@ -896,6 +915,7 @@ func taskConfigMap(id string) map[string]any {
 func productCaptureConfigMap(serverURL string) map[string]any {
 	cfg := map[string]any{
 		"id":              "capture-1",
+		"product_id":      "bmw-product-capture",
 		"org_id":          "org-1",
 		"pool_id":         "pool-1",
 		"policy_id":       "policy-1",
@@ -903,18 +923,38 @@ func productCaptureConfigMap(serverURL string) map[string]any {
 		"server_url":      serverURL,
 		"auth_token_ref":  "secret:compute-token",
 		"workload": map[string]any{
-			"kind": "product-capture",
-			"product_capture": map[string]any{
-				"url":             "https://www.amazon.com/Microsoft-Xbox-Gaming-Console-video-game/dp/B08H75RTZ8",
-				"allowed_hosts":   []any{"www.amazon.com"},
-				"capture_mode":    "browser",
-				"timeout_seconds": 45,
-				"max_html_bytes":  10485760,
-				"max_image_count": 6,
+			"kind": "provider",
+			"provider": map[string]any{
+				"provider_config": map[string]any{
+					"plugin_id":   "workflow-plugin-product-capture",
+					"provider_id": "browser",
+					"contract_id": "product-capture.browser.v1",
+					"version":     "v1.0.0",
+					"config_ref":  "config://network-products/bmw-product-capture/browser",
+				},
+				"operation": "capture_product",
+				"input": map[string]any{
+					"url":             "https://www.amazon.com/Microsoft-Xbox-Gaming-Console-video-game/dp/B08H75RTZ8",
+					"allowed_hosts":   []any{"www.amazon.com"},
+					"capture_mode":    "browser",
+					"timeout_seconds": 45,
+					"max_html_bytes":  10485760,
+					"max_image_count": 6,
+				},
 			},
 		},
 	}
 	return cfg
+}
+
+func productCaptureProviderConfig(productID string) protocol.ProviderConfig {
+	return protocol.ProviderConfig{
+		PluginID:   "workflow-plugin-product-capture",
+		ProviderID: "browser",
+		ContractID: "product-capture.browser.v1",
+		Version:    "v1.0.0",
+		ConfigRef:  "config://network-products/" + productID + "/browser",
+	}
 }
 
 func runtimeSecrets() map[string]any {

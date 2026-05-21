@@ -50,6 +50,8 @@ github.com/GoCodeAlone/workflow v0.27.0 h1:oufPjwWTuwbZw5PckBEDrIah+w7JJcj51nKQz
 github.com/GoCodeAlone/workflow v0.27.0/go.mod h1:Ue+5YDScTZgtA36q6r/kDaIRxGJFkyxXbeyJVNVJ0Cc=
 github.com/GoCodeAlone/workflow-compute v0.0.0-20260521003202-dc0b7c828ec9 h1:EJdhRIcQW2ptHe8Os+2tc8l/7qztJ6//IxQqAoAG2t0=
 github.com/GoCodeAlone/workflow-compute v0.0.0-20260521003202-dc0b7c828ec9/go.mod h1:m1GFY/28DcdOp2ok+tTlvqnJqNYhWk5cwJs/8zUFMh4=
+github.com/GoCodeAlone/workflow-compute v0.0.0-20260521144416-437084114563 h1:4RvLQWTWT0UaRLF9BqMSnOtzUP/+MxDZcgeJ6N5B93o=
+github.com/GoCodeAlone/workflow-compute v0.0.0-20260521144416-437084114563/go.mod h1:m1GFY/28DcdOp2ok+tTlvqnJqNYhWk5cwJs/8zUFMh4=
 github.com/GoCodeAlone/yaegi v0.17.2 h1:WK6Y6e0t1a6U7r+S2dN3CGWW1PizYD3zO0zneToZPxM=
 github.com/GoCodeAlone/yaegi v0.17.2/go.mod h1:z5Pr6Wse6QJcQvpgxTxzMAevFarH0N37TG88Y9dprx0=
 github.com/GoogleCloudPlatform/opentelemetry-operations-go/detectors/gcp v1.32.0 h1:rIkQfkCOVKc1OiRCNcSDD8ml5RJlZbH/Xsq7lbpynwc=
