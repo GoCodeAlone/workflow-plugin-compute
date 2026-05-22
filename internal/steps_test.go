@@ -13,6 +13,8 @@ import (
 	"github.com/GoCodeAlone/workflow-compute/pkg/protocol"
 )
 
+const testProviderImageRef = "ghcr.io/gocodealone/product-capture-browser@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
 func TestStepTypes(t *testing.T) {
 	steps := NewPlugin().(interface{ StepTypes() []string })
 	got := steps.StepTypes()
@@ -135,6 +137,9 @@ func TestDispatchStepAcceptsProviderWorkload(t *testing.T) {
 	if got.Workload.Provider.Operation != "capture_product" {
 		t.Fatalf("operation: %q", got.Workload.Provider.Operation)
 	}
+	if got.Workload.Provider.ImageRef != testProviderImageRef {
+		t.Fatalf("image ref: %q", got.Workload.Provider.ImageRef)
+	}
 	if !strings.Contains(string(got.Workload.Provider.Input), `"url":"https://www.amazon.com/Microsoft-Xbox-Gaming-Console-video-game/dp/B08H75RTZ8"`) {
 		t.Fatalf("provider input: %s", got.Workload.Provider.Input)
 	}
@@ -199,6 +204,7 @@ func TestProductCaptureStepDispatchesDynamicURLAndReturnsPreview(t *testing.T) {
 		"timeout_seconds":         90,
 		"url_field":               "url",
 		"allowed_hosts":           []any{"www.amazon.com", "amazon.com"},
+		"provider_image_ref":      testProviderImageRef,
 		"capture_timeout_seconds": 45,
 		"max_html_bytes":          1 << 20,
 		"max_image_count":         8,
@@ -229,6 +235,9 @@ func TestProductCaptureStepDispatchesDynamicURLAndReturnsPreview(t *testing.T) {
 	if submitted.Workload.Provider.Operation != "capture_product" {
 		t.Fatalf("operation: %q", submitted.Workload.Provider.Operation)
 	}
+	if submitted.Workload.Provider.ImageRef != testProviderImageRef {
+		t.Fatalf("image ref: %q", submitted.Workload.Provider.ImageRef)
+	}
 	if !strings.Contains(string(submitted.Workload.Provider.Input), `"url":"https://www.amazon.com/dp/B0DL7CKRJ5?th=1"`) {
 		t.Fatalf("provider input: %s", submitted.Workload.Provider.Input)
 	}
@@ -244,6 +253,7 @@ func TestProductCaptureStepRejectsUnknownConfig(t *testing.T) {
 	cfg := productCaptureConfigMap("https://compute.example.test")
 	cfg["url_field"] = "url"
 	cfg["allowed_hosts"] = []any{"www.amazon.com"}
+	cfg["provider_image_ref"] = testProviderImageRef
 	cfg["unknown"] = true
 	delete(cfg, "workload")
 	if _, err := newProductCaptureStep("capture", cfg); err == nil {
@@ -255,6 +265,7 @@ func TestProductCaptureStepAcceptsWorkflowInternalConfigDir(t *testing.T) {
 	cfg := productCaptureConfigMap("https://compute.example.test")
 	cfg["url_field"] = "url"
 	cfg["allowed_hosts"] = []any{"www.amazon.com"}
+	cfg["provider_image_ref"] = testProviderImageRef
 	cfg["_config_dir"] = "/app"
 	delete(cfg, "workload")
 	if _, err := newProductCaptureStep("capture", cfg); err != nil {
@@ -933,6 +944,7 @@ func productCaptureConfigMap(serverURL string) map[string]any {
 					"config_ref":  "config://network-products/bmw-product-capture/browser",
 				},
 				"operation": "capture_product",
+				"image_ref": testProviderImageRef,
 				"input": map[string]any{
 					"url":             "https://www.amazon.com/Microsoft-Xbox-Gaming-Console-video-game/dp/B08H75RTZ8",
 					"allowed_hosts":   []any{"www.amazon.com"},
