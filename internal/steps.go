@@ -297,6 +297,7 @@ type productCaptureStepConfig struct {
 	ProviderConfigRef     string   `json:"provider_config_ref,omitempty"`
 	ProviderConfigDigest  string   `json:"provider_config_digest,omitempty"`
 	ProviderOperation     string   `json:"provider_operation,omitempty"`
+	ProviderImageRef      string   `json:"provider_image_ref"`
 	URL                   string   `json:"url,omitempty"`
 	URLField              string   `json:"url_field,omitempty"`
 	AllowedHosts          []string `json:"allowed_hosts"`
@@ -332,6 +333,9 @@ func newProductCaptureStep(name string, raw map[string]any) (*productCaptureStep
 	if len(cfg.AllowedHosts) == 0 {
 		return nil, fmt.Errorf("step.compute_product_capture %q: allowed_hosts is required", name)
 	}
+	if err := validateProviderImageRef(cfg.ProviderImageRef); err != nil {
+		return nil, fmt.Errorf("step.compute_product_capture %q: provider_image_ref: %w", name, err)
+	}
 	if cfg.PollInterval != "" {
 		if d, err := time.ParseDuration(cfg.PollInterval); err != nil {
 			return nil, fmt.Errorf("step.compute_product_capture %q: poll_interval must be duration: %w", name, err)
@@ -347,6 +351,32 @@ func newProductCaptureStep(name string, raw map[string]any) (*productCaptureStep
 		}
 	}
 	return &productCaptureStep{name: name, config: cfg}, nil
+}
+
+func validateProviderImageRef(value string) error {
+	if strings.TrimSpace(value) == "" {
+		return errors.New("is required")
+	}
+	if strings.TrimSpace(value) != value || strings.ContainsAny(value, "\t\r\n \x00") {
+		return errors.New("must not contain whitespace or NUL")
+	}
+	_, digest, ok := strings.Cut(value, "@")
+	if !ok || !validSHA256Digest(digest) {
+		return errors.New("must be digest-pinned with @sha256:<64 hex>")
+	}
+	return nil
+}
+
+func validSHA256Digest(value string) bool {
+	if len(value) != len("sha256:")+64 || !strings.HasPrefix(value, "sha256:") {
+		return false
+	}
+	for _, r := range value[len("sha256:"):] {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') && (r < 'A' || r > 'F') {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *productCaptureStep) Execute(ctx context.Context, _ map[string]any, _ map[string]map[string]any, current map[string]any, metadata map[string]any, runtimeConfig map[string]any) (*sdk.StepResult, error) {
@@ -383,6 +413,7 @@ func (s *productCaptureStep) Execute(ctx context.Context, _ map[string]any, _ ma
 		Provider: &protocol.ProviderWorkload{
 			ProviderConfig: s.productCaptureProviderConfig(),
 			Operation:      s.productCaptureProviderOperation(),
+			ImageRef:       s.config.ProviderImageRef,
 			Input:          inputBytes,
 		},
 	}

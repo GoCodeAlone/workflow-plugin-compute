@@ -301,6 +301,7 @@ func (c *computeCLI) runSubmitProductCapture(ctx context.Context, args []string)
 	providerVersion := fs.String("provider-version", "v1.0.0", "provider contract version")
 	providerConfigRef := fs.String("provider-config-ref", "", "provider config ref")
 	providerOperation := fs.String("provider-operation", "capture_product", "provider operation")
+	providerImageRef := fs.String("provider-image-ref", "", "digest-pinned provider runtime image ref")
 	fs.Var(&allowedHosts, "allowed-host", "allowed URL host; repeatable or comma-separated")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -313,6 +314,9 @@ func (c *computeCLI) runSubmitProductCapture(ctx context.Context, args []string)
 	}
 	if *providerConfigRef == "" {
 		*providerConfigRef = "config://network-products/" + *productID + "/browser"
+	}
+	if err := validateProviderImageRef(*providerImageRef); err != nil {
+		return fmt.Errorf("--provider-image-ref: %w", err)
 	}
 	input := productCaptureProviderInput{
 		URL:            *productURL,
@@ -338,6 +342,7 @@ func (c *computeCLI) runSubmitProductCapture(ctx context.Context, args []string)
 				ConfigRef:  *providerConfigRef,
 			},
 			Operation: *providerOperation,
+			ImageRef:  *providerImageRef,
 			Input:     inputBytes,
 		},
 	}

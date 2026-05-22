@@ -173,6 +173,7 @@ func TestV739_CLISubmitProductCapture(t *testing.T) {
 		"--org", "org-1",
 		"--pool", "pool-1",
 		"--url", "https://www.amazon.com/Microsoft-Xbox-Gaming-Console-video-game/dp/B08H75RTZ8",
+		"--provider-image-ref", testProviderImageRef,
 		"--allowed-host", "www.amazon.com",
 		"--capture-mode", "browser",
 		"--capture-timeout", "45",
@@ -192,7 +193,8 @@ func TestV739_CLISubmitProductCapture(t *testing.T) {
 	if got.Workload.Provider.ProviderConfig.PluginID != "workflow-plugin-product-capture" ||
 		got.Workload.Provider.ProviderConfig.ProviderID != "browser" ||
 		got.Workload.Provider.ProviderConfig.ContractID != "product-capture.browser.v1" ||
-		got.Workload.Provider.Operation != "capture_product" {
+		got.Workload.Provider.Operation != "capture_product" ||
+		got.Workload.Provider.ImageRef != testProviderImageRef {
 		t.Fatalf("provider task: %+v", got.Workload.Provider)
 	}
 	if !bytes.Contains(got.Workload.Provider.Input, []byte(`"allowed_hosts":["www.amazon.com"]`)) {
