@@ -40,6 +40,11 @@ state belong to `workflow-compute`.
 records. It intentionally does not define a separate plugin-local executor,
 dependency, verification, reward, or network provider shape.
 
+The built-in edge catalog presets are examples of that boundary: edge lambda and
+edge CDN filter entries are plain `ProviderContract` records for
+`wasm-component` execution. They do not embed product capture, BMW, or any other
+application-specific workflow logic.
+
 If the wfcompute control plane exposes a public client surface, it should expose
 only the scoped APIs needed by external Workflow clients, such as task submit,
 task status, proof reads, credential lifecycle, and readiness. Provider

@@ -154,6 +154,48 @@ func TestProviderCatalogRejectsMalformedWorkflowComputeContract(t *testing.T) {
 	}
 }
 
+func TestEdgeWASMProviderCatalogPresetsAreWorkflowComputeContracts(t *testing.T) {
+	contracts := EdgeWASMProviderContracts()
+	if len(contracts) != 2 {
+		t.Fatalf("edge contract count: got %d", len(contracts))
+	}
+	seen := map[string]bool{}
+	for _, contract := range contracts {
+		seen[contract.ProviderID] = true
+		if contract.PluginID != "workflow-plugin-compute" {
+			t.Fatalf("contract leaked provider plugin: %+v", contract)
+		}
+		if strings.Contains(strings.ToLower(contract.ID+contract.ProviderID+contract.ContractID), "product-capture") ||
+			strings.Contains(strings.ToLower(contract.ID+contract.ProviderID+contract.ContractID), "bmw") {
+			t.Fatalf("edge contract leaked product capture/BMW boundary: %+v", contract)
+		}
+		if len(contract.RuntimeContract.Profiles) != 1 {
+			t.Fatalf("runtime profiles: %+v", contract.RuntimeContract.Profiles)
+		}
+		runtime := contract.RuntimeContract.Profiles[0]
+		if runtime.RuntimeProfile != protocol.RuntimeProfileWASMComponent ||
+			runtime.ExecutionSecurityTier != protocol.ExecutionWASMCapability ||
+			runtime.ExecutorProvider != "wasm-component" ||
+			runtime.WASM.ComponentDigest == "" ||
+			runtime.WASM.Filesystem != "forbidden" ||
+			runtime.WASM.NativeHostUpdates != "forbidden" {
+			t.Fatalf("edge runtime contract: %+v", runtime)
+		}
+	}
+	if !seen["edge-lambda"] || !seen["edge-cdn-filter"] {
+		t.Fatalf("edge providers missing: %+v", seen)
+	}
+	module, err := newProviderCatalogModule("edge", map[string]any{
+		"contracts": []any{toMap(t, contracts[0]), toMap(t, contracts[1])},
+	})
+	if err != nil {
+		t.Fatalf("newProviderCatalogModule(edge): %v", err)
+	}
+	if len(module.config.Contracts) != 2 {
+		t.Fatalf("module contracts: %+v", module.config.Contracts)
+	}
+}
+
 func validProviderContract() protocol.ProviderContract {
 	return protocol.ProviderContract{
 		ProtocolVersion:        protocol.Version,

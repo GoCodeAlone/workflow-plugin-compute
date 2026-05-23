@@ -20,6 +20,7 @@ C9: External Workflow apps may use plugin outside wfcompute deployment/network i
 C10: Public client control-plane access ≠ provider/admin mutation ingress.
 C11: Plugin provider catalog details track `workflow-compute`'s typed `ProviderContract`, not a parallel plugin-local provider shape.
 C12: Product capture is a typed workflow-compute workload; Workflow apps use this plugin to submit/wait, not command-workload shims.
+C13: Edge provider presets are generic compute provider contracts; product/application assumptions belong in the calling workflow or provider plugin.
 
 §I
 
@@ -58,6 +59,7 @@ V18: plugin guidance for public control-plane use excludes bootstrap token, prov
 V19: PR CI checks plugin provider catalog tests against current `GoCodeAlone/workflow-compute` main with a local module replace
 V20: manifest `stepTypes` exactly match runtime `StepTypes`
 V21: `step.compute_product_capture` requires explicit `allowed_hosts`, supports dynamic `url_field`, and returns only task/proof ids plus bounded preview fields
+V22: edge lambda/CDN catalog presets use only `protocol.ProviderContract` with `workflow-plugin-compute`, `wasm-component`, and `wasm-capability`; names/config/runtime fields must not mention product-capture, BMW, or provider-specific business logic
 
 §T
 
@@ -74,6 +76,7 @@ T9|x|include rewards in `wfctl compute accounting export`|I.cmd,I.wfctl,C8,V10,V
 T10|x|document external Workflow client use cases and public client-surface boundary|C9,C10,V17,V18
 T11|x|align provider catalog details with workflow-compute `ProviderContract` and gate drift in PR CI|C11,I.module,V19
 T12|x|add `step.compute_product_capture` typed workload submit/wait and preview output|C12,I.step,V2,V4,V20,V21
+T13|x|add edge lambda/CDN WASM provider catalog presets and module validation proof without plugin-local provider schema or product leakage|C13,I.module,V19,V22
 
 §B
 
