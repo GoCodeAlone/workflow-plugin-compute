@@ -27,9 +27,9 @@ Examples:
 - A data or game build workflow submits a long-running command workload to
   eligible enrolled agents, records the resulting task/proof ids, and uses the
   core ledger for accounting.
-- A commerce workflow submits a typed product-capture URL workload to an
-  enrolled browser-capture pool and uses the accepted proof preview to show a
-  user-confirmed product snapshot.
+- A provider plugin, such as product capture or edge compute, exposes a typed
+  `ProviderContract`; this plugin submits or waits on the resulting generic
+  workflow-compute task without embedding provider business logic.
 
 `compute.provider` in this repository means "Workflow connection to a
 wfcompute control plane." It is not a wfcompute worker/provider node. Provider
@@ -40,10 +40,10 @@ state belong to `workflow-compute`.
 records. It intentionally does not define a separate plugin-local executor,
 dependency, verification, reward, or network provider shape.
 
-The built-in edge catalog presets are examples of that boundary: edge lambda and
-edge CDN filter entries are plain `ProviderContract` records for
-`wasm-component` execution. They do not embed product capture, BMW, or any other
-application-specific workflow logic.
+Provider-specific contracts belong in the owning provider plugin. For example,
+product capture owns product URL semantics and edge compute owns edge
+lambda/CDN semantics; this plugin accepts their `ProviderContract` records
+through `compute.provider_catalog` without redefining them locally.
 
 If the wfcompute control plane exposes a public client surface, it should expose
 only the scoped APIs needed by external Workflow clients, such as task submit,
@@ -105,12 +105,6 @@ steps:
 For fanout work, use `step.compute_map` with a deterministic `tasks` list. The
 step submits every task, polls the core task/proof APIs, and stops the Workflow
 pipeline if any task fails, stalls, times out, or produces a non-accepted proof.
-
-For product capture, use `step.compute_product_capture`. It requires explicit
-`allowed_hosts`, `product_id`, and either a static `url` or dynamic `url_field`.
-The step submits generic `provider` work using the
-`workflow-plugin-product-capture` browser contract, waits for proof, and exposes
-the bounded `result_preview` fields returned by workflow-compute.
 
 ## Development
 

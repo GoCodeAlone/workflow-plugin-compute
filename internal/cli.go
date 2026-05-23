@@ -197,15 +197,13 @@ func (c *computeCLI) runRun(ctx context.Context, args []string) error {
 
 func (c *computeCLI) runSubmit(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: wfctl compute submit <command|container-build|product-capture>")
+		return errors.New("usage: wfctl compute submit <command|container-build>")
 	}
 	switch args[0] {
 	case "command":
 		return c.runSubmitCommand(ctx, args[1:])
 	case "container-build":
 		return c.runSubmitContainerBuild(ctx, args[1:])
-	case "product-capture":
-		return c.runSubmitProductCapture(ctx, args[1:])
 	default:
 		return fmt.Errorf("unknown wfctl compute submit workload %q", args[0])
 	}
@@ -280,81 +278,6 @@ func (c *computeCLI) runSubmitContainerBuild(ctx context.Context, args []string)
 			PushTargetRef:    *pushTargetRef,
 		},
 	})
-	return c.writeTaskReceipt(ctx, client, task)
-}
-
-func (c *computeCLI) runSubmitProductCapture(ctx context.Context, args []string) error {
-	fs := c.newFlagSet("compute submit product-capture")
-	common := addCLICommonFlags(fs)
-	taskFlags := addCLITaskFlags(fs)
-	productURL := fs.String("url", "", "supported product URL")
-	allowedHosts := csvFlag{}
-	captureMode := fs.String("capture-mode", string(protocol.ProductCaptureModeBrowser), "capture mode")
-	captureTimeout := fs.Int("capture-timeout", 45, "capture timeout seconds")
-	maxHTMLBytes := fs.Int64("max-html-bytes", protocol.MaxProductCaptureHTMLBytes, "maximum captured HTML bytes")
-	maxImageCount := fs.Int("max-image-count", 8, "maximum product images to return")
-	metadataOnly := fs.Bool("metadata-only", false, "request metadata-only extraction when supported")
-	productID := fs.String("product", "", "network product id for dynamic product-capture provider routing")
-	providerPluginID := fs.String("provider-plugin", "workflow-plugin-product-capture", "provider plugin id")
-	providerID := fs.String("provider-id", "browser", "provider id")
-	providerContractID := fs.String("provider-contract", "product-capture.browser.v1", "provider contract id")
-	providerVersion := fs.String("provider-version", "v1.0.0", "provider contract version")
-	providerConfigRef := fs.String("provider-config-ref", "", "provider config ref")
-	providerOperation := fs.String("provider-operation", "capture_product", "provider operation")
-	providerImageRef := fs.String("provider-image-ref", "", "digest-pinned provider runtime image ref")
-	fs.Var(&allowedHosts, "allowed-host", "allowed URL host; repeatable or comma-separated")
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	if err := taskFlags.validate(); err != nil {
-		return err
-	}
-	if *productID == "" {
-		return errors.New("--product is required")
-	}
-	if *providerConfigRef == "" {
-		*providerConfigRef = "config://network-products/" + *productID + "/browser"
-	}
-	if err := validateProviderImageRef(*providerImageRef); err != nil {
-		return fmt.Errorf("--provider-image-ref: %w", err)
-	}
-	input := productCaptureProviderInput{
-		URL:            *productURL,
-		AllowedHosts:   allowedHosts.values(),
-		CaptureMode:    *captureMode,
-		TimeoutSeconds: *captureTimeout,
-		MaxHTMLBytes:   *maxHTMLBytes,
-		MaxImageCount:  *maxImageCount,
-		MetadataOnly:   *metadataOnly,
-	}
-	inputBytes, err := json.Marshal(input)
-	if err != nil {
-		return err
-	}
-	workload := protocol.WorkloadSpec{
-		Kind: protocol.WorkloadProvider,
-		Provider: &protocol.ProviderWorkload{
-			ProviderConfig: protocol.ProviderConfig{
-				PluginID:   *providerPluginID,
-				ProviderID: *providerID,
-				ContractID: *providerContractID,
-				Version:    *providerVersion,
-				ConfigRef:  *providerConfigRef,
-			},
-			Operation: *providerOperation,
-			ImageRef:  *providerImageRef,
-			Input:     inputBytes,
-		},
-	}
-	if err := workload.Validate(); err != nil {
-		return err
-	}
-	client, err := common.client()
-	if err != nil {
-		return err
-	}
-	task := taskFlags.task(workload)
-	task.ProductID = *productID
 	return c.writeTaskReceipt(ctx, client, task)
 }
 
