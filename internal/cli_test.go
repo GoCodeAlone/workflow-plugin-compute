@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/GoCodeAlone/workflow-compute/pkg/protocol"
@@ -149,61 +150,14 @@ func TestT8_CLISubmitContainerBuild(t *testing.T) {
 	}
 }
 
-func TestV739_CLISubmitProductCapture(t *testing.T) {
-	var got protocol.Task
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost || r.URL.Path != "/v1/tasks" {
-			t.Fatalf("request: %s %s", r.Method, r.URL.Path)
-		}
-		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
-			t.Fatalf("decode task: %v", err)
-		}
-		w.WriteHeader(http.StatusCreated)
-		_ = json.NewEncoder(w).Encode(map[string]any{"task": got})
-	}))
-	defer srv.Close()
-
+func TestCLISubmitRejectsProviderSpecificProductCapture(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	code := newCLI(&stdout, &stderr).RunCLI([]string{
-		"compute", "submit", "product-capture",
-		"--server", srv.URL,
-		"--token", "token",
-		"--id", "capture-1",
-		"--product", "bmw-product-capture",
-		"--org", "org-1",
-		"--pool", "pool-1",
-		"--url", "https://www.amazon.com/Microsoft-Xbox-Gaming-Console-video-game/dp/B08H75RTZ8",
-		"--provider-image-ref", testProviderImageRef,
-		"--allowed-host", "www.amazon.com",
-		"--capture-mode", "browser",
-		"--capture-timeout", "45",
-		"--max-html-bytes", "10485760",
-		"--max-image-count", "6",
-	})
-
-	if code != 0 {
-		t.Fatalf("RunCLI code=%d stderr=%s", code, stderr.String())
+	code := newCLI(&stdout, &stderr).RunCLI([]string{"compute", "submit", "product-capture"})
+	if code == 0 {
+		t.Fatal("product-capture submit must belong to workflow-plugin-product-capture, not workflow-plugin-compute")
 	}
-	if got.ProductID != "bmw-product-capture" {
-		t.Fatalf("product id: got %+v", got)
-	}
-	if got.Workload.Kind != protocol.WorkloadProvider || got.Workload.Provider == nil {
-		t.Fatalf("task: got %+v", got)
-	}
-	if got.Workload.Provider.ProviderConfig.PluginID != "workflow-plugin-product-capture" ||
-		got.Workload.Provider.ProviderConfig.ProviderID != "browser" ||
-		got.Workload.Provider.ProviderConfig.ContractID != "product-capture.browser.v1" ||
-		got.Workload.Provider.Operation != "capture_product" ||
-		got.Workload.Provider.ImageRef != testProviderImageRef {
-		t.Fatalf("provider task: %+v", got.Workload.Provider)
-	}
-	if !bytes.Contains(got.Workload.Provider.Input, []byte(`"allowed_hosts":["www.amazon.com"]`)) {
-		t.Fatalf("provider input: %s", got.Workload.Provider.Input)
-	}
-	for _, forbidden := range [][]byte{[]byte("token"), []byte("signature"), []byte("workload"), []byte("amazon.com")} {
-		if bytes.Contains(stdout.Bytes(), forbidden) {
-			t.Fatalf("stdout leaked %q: %s", forbidden, stdout.String())
-		}
+	if !strings.Contains(stderr.String(), `unknown wfctl compute submit workload "product-capture"`) {
+		t.Fatalf("stderr: %s", stderr.String())
 	}
 }
 

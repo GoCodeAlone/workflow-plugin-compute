@@ -13,14 +13,26 @@ import (
 	"github.com/GoCodeAlone/workflow-compute/pkg/protocol"
 )
 
-const testProviderImageRef = "ghcr.io/gocodealone/product-capture-browser@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+const testProviderImageRef = "ghcr.io/gocodealone/generic-provider@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
 func TestStepTypes(t *testing.T) {
 	steps := NewPlugin().(interface{ StepTypes() []string })
 	got := steps.StepTypes()
-	want := []string{"step.compute_dispatch", "step.compute_wait", "step.compute_map", "step.compute_product_capture"}
+	want := []string{"step.compute_dispatch", "step.compute_wait", "step.compute_map"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("step types: got %#v", got)
+	}
+}
+
+func TestComputePluginDoesNotExposeProviderSpecificProductCapture(t *testing.T) {
+	plugin := NewPlugin().(*computePlugin)
+	for _, stepType := range plugin.StepTypes() {
+		if strings.Contains(stepType, "product") || strings.Contains(stepType, "capture") {
+			t.Fatalf("compute plugin leaked provider-specific step type %q", stepType)
+		}
+	}
+	if _, err := plugin.CreateStep("step.compute_product_capture", "capture", map[string]any{}); err == nil {
+		t.Fatal("compute plugin accepted provider-specific product capture step")
 	}
 }
 
@@ -114,7 +126,7 @@ func TestDispatchStepAcceptsProviderWorkload(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	step, err := newDispatchStep("dispatch", productCaptureConfigMap(srv.URL))
+	step, err := newDispatchStep("dispatch", genericProviderConfigMap(srv.URL))
 	if err != nil {
 		t.Fatalf("newDispatchStep: %v", err)
 	}
@@ -125,151 +137,33 @@ func TestDispatchStepAcceptsProviderWorkload(t *testing.T) {
 	if result.StopPipeline {
 		t.Fatalf("unexpected stop: %+v", result.Output)
 	}
-	if got.ProductID != "bmw-product-capture" {
-		t.Fatalf("product id: got %+v", got)
+	if got.ProductID != "" {
+		t.Fatalf("dispatch should not inject product identity: got %+v", got)
 	}
 	if got.Workload.Kind != protocol.WorkloadProvider || got.Workload.Provider == nil {
 		t.Fatalf("workload: got %+v", got.Workload)
 	}
-	if got.Workload.Provider.ProviderConfig != productCaptureProviderConfig("bmw-product-capture") {
+	if got.Workload.Provider.ProviderConfig != genericProviderConfig() {
 		t.Fatalf("provider config: %+v", got.Workload.Provider.ProviderConfig)
 	}
-	if got.Workload.Provider.Operation != "capture_product" {
+	if got.Workload.Provider.Operation != "transform" {
 		t.Fatalf("operation: %q", got.Workload.Provider.Operation)
 	}
 	if got.Workload.Provider.ImageRef != testProviderImageRef {
 		t.Fatalf("image ref: %q", got.Workload.Provider.ImageRef)
 	}
-	if !strings.Contains(string(got.Workload.Provider.Input), `"url":"https://www.amazon.com/Microsoft-Xbox-Gaming-Console-video-game/dp/B08H75RTZ8"`) {
+	if !strings.Contains(string(got.Workload.Provider.Input), `"value":"hello"`) {
 		t.Fatalf("provider input: %s", got.Workload.Provider.Input)
 	}
 }
 
 func TestDispatchStepRejectsUnknownNestedProviderConfig(t *testing.T) {
-	cfg := productCaptureConfigMap("https://compute.example.test")
+	cfg := genericProviderConfigMap("https://compute.example.test")
 	workload := cfg["workload"].(map[string]any)
 	provider := workload["provider"].(map[string]any)
 	provider["extra"] = true
 	if _, err := newDispatchStep("dispatch", cfg); err == nil {
 		t.Fatal("expected strict nested provider unknown-field error")
-	}
-}
-
-func TestProductCaptureStepDispatchesDynamicURLAndReturnsPreview(t *testing.T) {
-	var submitted protocol.Task
-	var taskCalls int
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.Method == http.MethodPost && r.URL.Path == "/v1/tasks":
-			if err := json.NewDecoder(r.Body).Decode(&submitted); err != nil {
-				t.Fatalf("decode task: %v", err)
-			}
-			w.WriteHeader(http.StatusCreated)
-			_ = json.NewEncoder(w).Encode(map[string]any{"task": submitted})
-		case r.Method == http.MethodGet && r.URL.Path == "/v1/tasks":
-			taskCalls++
-			status := protocol.TaskQueued
-			if taskCalls > 1 {
-				status = protocol.TaskSucceeded
-			}
-			_ = json.NewEncoder(w).Encode(map[string]any{"tasks": []protocol.Task{{
-				ID:     submitted.ID,
-				OrgID:  submitted.OrgID,
-				PoolID: submitted.PoolID,
-				Status: status,
-			}}, "stalls": []any{}})
-		case r.Method == http.MethodGet && r.URL.Path == "/v1/proofs":
-			proof := proofReceipt(submitted.ID)
-			proof.ResultPreview = map[string]any{
-				"title":          "Xbox Series X",
-				"seller":         "Sole Providers",
-				"prime_eligible": false,
-				"error":          "diagnostic only",
-			}
-			_ = json.NewEncoder(w).Encode(map[string]any{"proofs": []protocol.ProofReceipt{proof}})
-		default:
-			t.Fatalf("request: %s %s", r.Method, r.URL.Path)
-		}
-	}))
-	defer srv.Close()
-
-	step, err := newProductCaptureStep("capture", map[string]any{
-		"server_url":              srv.URL,
-		"auth_token_ref":          "secret:compute-token",
-		"id":                      "capture-1",
-		"product_id":              "bmw-product-capture",
-		"org_id":                  "org-1",
-		"pool_id":                 "pool-1",
-		"policy_id":               "policy-1",
-		"timeout_seconds":         90,
-		"url_field":               "url",
-		"allowed_hosts":           []any{"www.amazon.com", "amazon.com"},
-		"provider_image_ref":      testProviderImageRef,
-		"capture_timeout_seconds": 45,
-		"max_html_bytes":          1 << 20,
-		"max_image_count":         8,
-		"poll_interval":           "1ms",
-		"wait_timeout":            "100ms",
-	})
-	if err != nil {
-		t.Fatalf("newProductCaptureStep: %v", err)
-	}
-	result, err := step.Execute(context.Background(), nil, nil, map[string]any{
-		"url": "https://www.amazon.com/dp/B0DL7CKRJ5?th=1",
-	}, nil, runtimeSecrets())
-	if err != nil {
-		t.Fatalf("Execute: %v", err)
-	}
-	if result.StopPipeline {
-		t.Fatalf("unexpected stop: %+v", result.Output)
-	}
-	if submitted.ProductID != "bmw-product-capture" {
-		t.Fatalf("submitted product id: %+v", submitted)
-	}
-	if submitted.Workload.Kind != protocol.WorkloadProvider || submitted.Workload.Provider == nil {
-		t.Fatalf("submitted workload: %+v", submitted.Workload)
-	}
-	if submitted.Workload.Provider.ProviderConfig != productCaptureProviderConfig("bmw-product-capture") {
-		t.Fatalf("provider config: %+v", submitted.Workload.Provider.ProviderConfig)
-	}
-	if submitted.Workload.Provider.Operation != "capture_product" {
-		t.Fatalf("operation: %q", submitted.Workload.Provider.Operation)
-	}
-	if submitted.Workload.Provider.ImageRef != testProviderImageRef {
-		t.Fatalf("image ref: %q", submitted.Workload.Provider.ImageRef)
-	}
-	if !strings.Contains(string(submitted.Workload.Provider.Input), `"url":"https://www.amazon.com/dp/B0DL7CKRJ5?th=1"`) {
-		t.Fatalf("provider input: %s", submitted.Workload.Provider.Input)
-	}
-	if result.Output["title"] != "Xbox Series X" || result.Output["seller"] != "Sole Providers" || result.Output["prime_eligible"] != false {
-		t.Fatalf("preview output: %+v", result.Output)
-	}
-	if result.Output["error"] != nil {
-		t.Fatalf("preview error key should not be promoted: %+v", result.Output)
-	}
-}
-
-func TestProductCaptureStepRejectsUnknownConfig(t *testing.T) {
-	cfg := productCaptureConfigMap("https://compute.example.test")
-	cfg["url_field"] = "url"
-	cfg["allowed_hosts"] = []any{"www.amazon.com"}
-	cfg["provider_image_ref"] = testProviderImageRef
-	cfg["unknown"] = true
-	delete(cfg, "workload")
-	if _, err := newProductCaptureStep("capture", cfg); err == nil {
-		t.Fatal("expected strict unknown-field error")
-	}
-}
-
-func TestProductCaptureStepAcceptsWorkflowInternalConfigDir(t *testing.T) {
-	cfg := productCaptureConfigMap("https://compute.example.test")
-	cfg["url_field"] = "url"
-	cfg["allowed_hosts"] = []any{"www.amazon.com"}
-	cfg["provider_image_ref"] = testProviderImageRef
-	cfg["_config_dir"] = "/app"
-	delete(cfg, "workload")
-	if _, err := newProductCaptureStep("capture", cfg); err != nil {
-		t.Fatalf("expected Workflow-injected _config_dir to be accepted: %v", err)
 	}
 }
 
@@ -923,10 +817,9 @@ func taskConfigMap(id string) map[string]any {
 	}
 }
 
-func productCaptureConfigMap(serverURL string) map[string]any {
+func genericProviderConfigMap(serverURL string) map[string]any {
 	cfg := map[string]any{
-		"id":              "capture-1",
-		"product_id":      "bmw-product-capture",
+		"id":              "provider-1",
 		"org_id":          "org-1",
 		"pool_id":         "pool-1",
 		"policy_id":       "policy-1",
@@ -937,21 +830,16 @@ func productCaptureConfigMap(serverURL string) map[string]any {
 			"kind": "provider",
 			"provider": map[string]any{
 				"provider_config": map[string]any{
-					"plugin_id":   "workflow-plugin-product-capture",
-					"provider_id": "browser",
-					"contract_id": "product-capture.browser.v1",
+					"plugin_id":   "workflow-plugin-generic-provider",
+					"provider_id": "transformer",
+					"contract_id": "generic-transform.v1",
 					"version":     "v1.0.0",
-					"config_ref":  "config://network-products/bmw-product-capture/browser",
+					"config_ref":  "config://providers/generic-transformer/main",
 				},
-				"operation": "capture_product",
+				"operation": "transform",
 				"image_ref": testProviderImageRef,
 				"input": map[string]any{
-					"url":             "https://www.amazon.com/Microsoft-Xbox-Gaming-Console-video-game/dp/B08H75RTZ8",
-					"allowed_hosts":   []any{"www.amazon.com"},
-					"capture_mode":    "browser",
-					"timeout_seconds": 45,
-					"max_html_bytes":  10485760,
-					"max_image_count": 6,
+					"value": "hello",
 				},
 			},
 		},
@@ -959,13 +847,13 @@ func productCaptureConfigMap(serverURL string) map[string]any {
 	return cfg
 }
 
-func productCaptureProviderConfig(productID string) protocol.ProviderConfig {
+func genericProviderConfig() protocol.ProviderConfig {
 	return protocol.ProviderConfig{
-		PluginID:   "workflow-plugin-product-capture",
-		ProviderID: "browser",
-		ContractID: "product-capture.browser.v1",
+		PluginID:   "workflow-plugin-generic-provider",
+		ProviderID: "transformer",
+		ContractID: "generic-transform.v1",
 		Version:    "v1.0.0",
-		ConfigRef:  "config://network-products/" + productID + "/browser",
+		ConfigRef:  "config://providers/generic-transformer/main",
 	}
 }
 
