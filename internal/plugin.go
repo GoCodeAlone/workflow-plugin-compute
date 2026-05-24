@@ -6,7 +6,7 @@ import (
 	sdk "github.com/GoCodeAlone/workflow/plugin/external/sdk"
 )
 
-var Version = "dev"
+var Version = "0.0.0"
 
 type computePlugin struct{}
 
