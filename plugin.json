@@ -1,6 +1,6 @@
 {
   "name": "workflow-plugin-compute",
-  "version": "0.1.0",
+  "version": "0.1.6",
   "description": "Workflow adapter for workflow-compute dispatch, wait, map, provider, pool, and provider catalog integration",
   "author": "GoCodeAlone",
   "license": "MIT",
