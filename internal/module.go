@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/GoCodeAlone/workflow-compute/pkg/protocol"
+	coreprotocol "github.com/GoCodeAlone/workflow-plugin-compute-core/protocol"
 	sdk "github.com/GoCodeAlone/workflow/plugin/external/sdk"
 )
 
@@ -170,7 +170,7 @@ func poolModuleSchema() sdk.ModuleSchemaData {
 }
 
 type providerCatalogConfig struct {
-	Contracts []protocol.ProviderContract `json:"contracts"`
+	Contracts []coreprotocol.ProviderContract `json:"contracts"`
 }
 
 type providerCatalogModule struct {
@@ -226,7 +226,7 @@ func providerCatalogModuleSchema() sdk.ModuleSchemaData {
 		Category:    "Compute",
 		Description: "Declarative workflow-compute provider contracts validated against the core provider catalog protocol.",
 		ConfigFields: []sdk.ConfigField{
-			{Name: "contracts", Type: "array", Description: "workflow-compute ProviderContract records.", Required: true},
+			{Name: "contracts", Type: "array", Description: "workflow-plugin-compute-core ProviderContract records.", Required: true},
 		},
 	}
 }

@@ -18,9 +18,9 @@ C7: Standalone repo verification uses `GOWORK=off` unless parent `go.work` inclu
 C8: `wfctl compute` CLI adapter owns operator UX only; scheduler/ledger/proof semantics stay core.
 C9: External Workflow apps may use plugin outside wfcompute deployment/network if they can reach scoped control-plane client APIs.
 C10: Public client control-plane access ≠ provider/admin mutation ingress.
-C11: Plugin provider catalog details track `workflow-compute`'s typed `ProviderContract`, not a parallel plugin-local provider shape.
+C11: Plugin provider catalog details track `workflow-plugin-compute-core/protocol.ProviderContract`, not a parallel plugin-local provider shape.
 C12: Provider-specific typed steps belong in the owning provider plugin, not this generic compute adapter.
-C13: Provider catalog entries are imported `workflow-compute` contracts; product/application assumptions belong in the calling workflow or provider plugin.
+C13: Provider catalog entries are imported compute-core contracts; product/application assumptions belong in the calling workflow or provider plugin.
 C14: Task residue policy submitted by this plugin is customer intent only; `workflow-compute` owns provider/product authority resolution, policy hashing, lease enforcement, and residue cleanup.
 
 §I
@@ -29,7 +29,7 @@ repo: `workflow-plugin-compute` → Workflow external plugin adapter
 core: `workflow-compute` → scheduler, worker, ledger, proof, reward, dashboard
 module: `compute.provider` → control-plane connection + auth refs
 module: `compute.pool` → org/pool/policy defaults
-module: `compute.provider_catalog` → core `protocol.ProviderContract` declarations
+module: `compute.provider_catalog` → public compute-core `protocol.ProviderContract` declarations
 step: `step.compute_dispatch` → submit task
 step: `step.compute_wait` → wait/read proof
 step: `step.compute_map` → fanout deterministic task set
@@ -56,10 +56,10 @@ V15: `wfctl compute submit` supports command/container-build without leaking wor
 V16: `wfctl compute accounting export` includes raw contribution units and policy reward outputs without leaking token
 V17: docs/examples distinguish `compute.provider` Workflow connection from wfcompute provider/worker node
 V18: plugin guidance for public control-plane use excludes bootstrap token, provider mutation, package/campaign/trust-root mutation, and raw agent/supervisor control APIs
-V19: PR CI checks plugin provider catalog tests against current `GoCodeAlone/workflow-compute` main with a local module replace
+V19: PR CI checks plugin provider catalog tests against public `workflow-plugin-compute-core/protocol.ProviderContract`
 V20: manifest `stepTypes` exactly match runtime `StepTypes`
 V21: plugin step/CLI surfaces must not mention product-capture, BMW, edge lambda, edge CDN, or another provider-specific business domain
-V22: `compute.provider_catalog` accepts typed `protocol.ProviderContract` records from provider plugins without defining a parallel plugin-local provider schema
+V22: `compute.provider_catalog` accepts typed `workflow-plugin-compute-core/protocol.ProviderContract` records from provider plugins without defining a parallel plugin-local provider schema
 V23: `step.compute_dispatch` and `step.compute_map` accept valid short-lived task `residue_policy`, reject malformed residue policy locally, and do not compute policy hashes or override provider/product authority
 
 §T
@@ -75,7 +75,7 @@ T7|x|add `wfctl compute github-runner` adapter commands for runner register/job 
 T8|x|add `wfctl compute submit command|container-build` for ad hoc workload demos|I.cmd,I.wfctl,C8,V10,V12,V15
 T9|x|include rewards in `wfctl compute accounting export`|I.cmd,I.wfctl,C8,V10,V16
 T10|x|document external Workflow client use cases and public client-surface boundary|C9,C10,V17,V18
-T11|x|align provider catalog details with workflow-compute `ProviderContract` and gate drift in PR CI|C11,I.module,V19
+T11|x|align provider catalog details with public compute-core `ProviderContract` and gate drift in PR CI|C11,I.module,V19
 T12|x|remove provider-specific product-capture step/CLI/domain preview flattening from generic compute adapter|C12,I.step,V20,V21
 T13|x|keep provider catalog validation generic so external provider plugins can supply edge/product contracts without plugin-local provider schema|C13,I.module,V19,V22
 T14|x|submit optional short-lived task residue policy through dispatch/map steps without taking over core authority resolution|C14,I.step,V23
