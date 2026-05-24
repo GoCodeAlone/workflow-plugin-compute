@@ -5,7 +5,7 @@ go 1.26.3
 require (
 	github.com/GoCodeAlone/workflow v0.62.0
 	github.com/GoCodeAlone/workflow-compute v0.0.0-20260524063206-b3e8de8ce8d6
-	github.com/GoCodeAlone/workflow-plugin-compute-core v0.0.0-20260524090838-d0045a893984
+	github.com/GoCodeAlone/workflow-plugin-compute-core v0.0.0-20260524093307-28ef9b0aae8f
 )
 
 require (
