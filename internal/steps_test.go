@@ -112,6 +112,58 @@ func TestDispatchStepRejectsUnknownNestedWorkloadConfig(t *testing.T) {
 	}
 }
 
+func TestDispatchStepSubmitsResiduePolicy(t *testing.T) {
+	var got protocol.Task
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Fatalf("decode task: %v", err)
+		}
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(map[string]any{"task": got})
+	}))
+	defer srv.Close()
+
+	cfg := dispatchConfigMap(srv.URL)
+	cfg["residue_policy"] = map[string]any{
+		"mode":            "session-bound",
+		"allowed_modes":   []any{"isolated", "session-bound"},
+		"session_key":     "ci-main",
+		"max_age_seconds": float64(600),
+		"max_reuse_count": float64(2),
+		"wipe_on_failure": true,
+	}
+	step, err := newDispatchStep("dispatch", cfg)
+	if err != nil {
+		t.Fatalf("newDispatchStep: %v", err)
+	}
+	if _, err := step.Execute(context.Background(), nil, nil, nil, nil, runtimeSecrets()); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if got.ResiduePolicy.Mode != protocol.ResidueModeSessionBound ||
+		got.ResiduePolicy.SessionKey != "ci-main" ||
+		got.ResiduePolicy.MaxAgeSeconds != 600 ||
+		got.ResiduePolicy.MaxReuseCount != 2 ||
+		!got.ResiduePolicy.WipeOnFailure {
+		t.Fatalf("residue policy not submitted: %+v", got.ResiduePolicy)
+	}
+}
+
+func TestDispatchStepRejectsMalformedResiduePolicy(t *testing.T) {
+	cfg := dispatchConfigMap("https://compute.example.test")
+	cfg["residue_policy"] = map[string]any{"mode": "bogus"}
+	if _, err := newDispatchStep("dispatch", cfg); err == nil || !strings.Contains(err.Error(), "residue_policy") {
+		t.Fatalf("expected residue_policy validation error, got %v", err)
+	}
+}
+
+func TestDispatchStepRejectsImplicitWorkerBoundResiduePolicy(t *testing.T) {
+	cfg := dispatchConfigMap("https://compute.example.test")
+	cfg["residue_policy"] = map[string]any{"mode": "worker-bound"}
+	if _, err := newDispatchStep("dispatch", cfg); err == nil || !strings.Contains(err.Error(), "explicit_worker_bound") {
+		t.Fatalf("expected explicit_worker_bound validation error, got %v", err)
+	}
+}
+
 func TestDispatchStepAcceptsProviderWorkload(t *testing.T) {
 	var got protocol.Task
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -441,6 +493,72 @@ func TestMapStepSubmitsEachTaskAndWaits(t *testing.T) {
 	}
 	if tasks[0]["proof_id"] != "proof-1" || tasks[1]["status"] != string(protocol.TaskSucceeded) {
 		t.Fatalf("task outputs: got %+v", tasks)
+	}
+}
+
+func TestMapStepSubmitsPerTaskResiduePolicies(t *testing.T) {
+	var submitted []protocol.Task
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/tasks":
+			switch r.Method {
+			case http.MethodPost:
+				var task protocol.Task
+				if err := json.NewDecoder(r.Body).Decode(&task); err != nil {
+					t.Fatalf("decode task: %v", err)
+				}
+				submitted = append(submitted, task)
+				w.WriteHeader(http.StatusCreated)
+				_ = json.NewEncoder(w).Encode(map[string]any{"task": task})
+			case http.MethodGet:
+				tasks := append([]protocol.Task(nil), submitted...)
+				for i := range tasks {
+					tasks[i].Status = protocol.TaskSucceeded
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{"tasks": tasks, "stalls": []any{}})
+			default:
+				t.Fatalf("method: %s", r.Method)
+			}
+		case "/v1/proofs":
+			proofs := make([]protocol.ProofReceipt, 0, len(submitted))
+			for _, task := range submitted {
+				proofs = append(proofs, proofReceipt(task.ID))
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"proofs": proofs})
+		default:
+			t.Fatalf("path: %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	first := taskConfigMap("task-1")
+	first["residue_policy"] = map[string]any{
+		"mode":          "provider-bound",
+		"allowed_modes": []any{"isolated", "provider-bound"},
+	}
+	second := taskConfigMap("task-2")
+	second["residue_policy"] = map[string]any{"mode": "isolated"}
+	step, err := newMapStep("map", map[string]any{
+		"server_url":     srv.URL,
+		"auth_token_ref": "secret:compute-token",
+		"tasks":          []any{first, second},
+		"poll_interval":  "1ms",
+		"timeout":        "100ms",
+	})
+	if err != nil {
+		t.Fatalf("newMapStep: %v", err)
+	}
+	result, err := step.Execute(context.Background(), nil, nil, nil, nil, runtimeSecrets())
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if result.StopPipeline {
+		t.Fatalf("unexpected stop: %+v", result.Output)
+	}
+	if len(submitted) != 2 ||
+		submitted[0].ResiduePolicy.Mode != protocol.ResidueModeProviderBound ||
+		submitted[1].ResiduePolicy.Mode != protocol.ResidueModeIsolated {
+		t.Fatalf("submitted residue policies: %+v", submitted)
 	}
 }
 

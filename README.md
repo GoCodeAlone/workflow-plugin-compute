@@ -83,6 +83,15 @@ steps:
       timeout_seconds: 1800
       labels:
         app: example-api
+      residue_policy:
+        mode: session-bound
+        allowed_modes:
+          - isolated
+          - session-bound
+        session_key: ci-main
+        max_age_seconds: 1800
+        max_reuse_count: 3
+        wipe_on_failure: true
       workload:
         kind: container-build
         container_build:
@@ -102,6 +111,11 @@ steps:
       timeout: 30m
 ```
 
+`residue_policy` is optional task intent for short-lived workloads, useful for
+bounded CI dependency caches. The wfcompute provider runtime profile and network
+product must also allow the requested mode; core `workflow-compute` resolves the
+effective lease policy and enforces workspace reuse or isolation.
+
 For fanout work, use `step.compute_map` with a deterministic `tasks` list. The
 step submits every task, polls the core task/proof APIs, and stops the Workflow
 pipeline if any task fails, stalls, times out, or produces a non-accepted proof.
@@ -110,7 +124,7 @@ pipeline if any task fails, stalls, times out, or produces a non-accepted proof.
 
 ```sh
 GOWORK=off go test ./...
-wfctl validate workflow.yaml
+wfctl validate --allow-no-entry-points workflow.yaml
 GOWORK=off wfctl build --config workflow.yaml --no-push --tag local
 ```
 

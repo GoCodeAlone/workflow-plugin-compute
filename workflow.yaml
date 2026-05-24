@@ -11,4 +11,9 @@ ci:
       command: GOWORK=off go test ./...
       coverage: true
 
-modules: []
+modules:
+  - name: plugin-context
+    type: platform.context
+    config:
+      org: GoCodeAlone
+      environment: local
