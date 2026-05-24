@@ -12,8 +12,8 @@ github.com/GoCodeAlone/modular/modules/auth v1.15.0 h1:pBSkPSf4k4GLSbUQFLuPa+nFb
 github.com/GoCodeAlone/modular/modules/auth v1.15.0/go.mod h1:vmIm/LQrcURS2p02YwaELb+CZoHPtT0XB0v1i+sj9i4=
 github.com/GoCodeAlone/modular/modules/eventbus/v2 v2.8.0 h1:buYs0TGNbAZgtTq1Qb+dfmTv3+ZOBIN0HbvVBLyNqxE=
 github.com/GoCodeAlone/modular/modules/eventbus/v2 v2.8.0/go.mod h1:329flAKmwrPq2JEwu9iltWv6A83H/Di82Xze+kvdKDw=
-github.com/GoCodeAlone/workflow v0.62.0 h1:emFkTomDpVmBcEfw7quRO4V/J4qDsWNx/CrBdlGqkfg=
-github.com/GoCodeAlone/workflow v0.62.0/go.mod h1:659GGDrw3QJ7b625y9rf8QhKIpt1VCoEG0MxKu5tGQs=
+github.com/GoCodeAlone/workflow v0.64.0 h1:2CpbYPwIqdGDb3xi3YJpwcteIum4ehBSrnRql/1YvB4=
+github.com/GoCodeAlone/workflow v0.64.0/go.mod h1:659GGDrw3QJ7b625y9rf8QhKIpt1VCoEG0MxKu5tGQs=
 github.com/GoCodeAlone/workflow-compute v0.0.0-20260524063206-b3e8de8ce8d6 h1:R2YBH5Vnkn/O1ksTRbzn5vaMN/GtnuFNiTDRF/FR0GY=
 github.com/GoCodeAlone/workflow-compute v0.0.0-20260524063206-b3e8de8ce8d6/go.mod h1:T8yGXrRBm2USwkRFvMaoq4aPDt/f7JciZY9Y/l/upYs=
 github.com/GoCodeAlone/workflow-plugin-compute-core v0.0.0-20260524093307-28ef9b0aae8f h1:U0heAsFJNVAsUOmBY4Y0Pq4uWZdBj73W7ddwYFdTqN0=
