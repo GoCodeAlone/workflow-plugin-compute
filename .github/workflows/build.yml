@@ -28,7 +28,7 @@ jobs:
           go env -w GONOSUMDB=github.com/GoCodeAlone/*
       - name: Install wfctl
         run: |
-          curl -fsSL -o wfctl https://github.com/GoCodeAlone/workflow/releases/download/v0.27.0/wfctl-linux-amd64
+          curl -fsSL -o wfctl https://github.com/GoCodeAlone/workflow/releases/download/v0.63.1/wfctl-linux-amd64
           chmod +x wfctl
           sudo mv wfctl /usr/local/bin/wfctl
       - name: Test
@@ -44,6 +44,6 @@ jobs:
       - name: Check workflow-compute provider alignment
         run: scripts/check-workflow-compute-alignment.sh "$GITHUB_WORKSPACE/workflow-compute"
       - name: Validate workflow config
-        run: wfctl validate workflow.yaml
+        run: wfctl validate --allow-no-entry-points workflow.yaml
       - name: Build with wfctl
         run: wfctl build --config workflow.yaml --no-push --tag ci

@@ -154,6 +154,41 @@ func TestProviderCatalogRejectsMalformedWorkflowComputeContract(t *testing.T) {
 	}
 }
 
+func TestProviderCatalogAcceptsRuntimeProfileResiduePolicy(t *testing.T) {
+	contract := validProviderContract()
+	contract.RuntimeContract.Profiles[0].HostWorkspaceSupported = true
+	contract.RuntimeContract.Profiles[0].ResiduePolicy = protocol.ResiduePolicy{
+		Mode:          protocol.ResidueModeProviderBound,
+		AllowedModes:  []protocol.ResidueMode{protocol.ResidueModeIsolated, protocol.ResidueModeProviderBound},
+		MaxAgeSeconds: 600,
+		WipeOnFailure: true,
+	}
+	module, err := newProviderCatalogModule("catalog", map[string]any{
+		"contracts": []any{toMap(t, contract)},
+	})
+	if err != nil {
+		t.Fatalf("newProviderCatalogModule: %v", err)
+	}
+	if module.config.Contracts[0].RuntimeContract.Profiles[0].ResiduePolicy.Mode != protocol.ResidueModeProviderBound {
+		t.Fatalf("residue policy not decoded: %+v", module.config.Contracts[0].RuntimeContract.Profiles[0].ResiduePolicy)
+	}
+}
+
+func TestProviderCatalogRejectsReusableResidueWithoutWorkspace(t *testing.T) {
+	contract := validProviderContract()
+	contract.RuntimeContract.Profiles[0].HostWorkspaceSupported = false
+	contract.RuntimeContract.Profiles[0].ResiduePolicy = protocol.ResiduePolicy{
+		Mode:         protocol.ResidueModeProviderBound,
+		AllowedModes: []protocol.ResidueMode{protocol.ResidueModeProviderBound},
+	}
+	_, err := newProviderCatalogModule("catalog", map[string]any{
+		"contracts": []any{toMap(t, contract)},
+	})
+	if err == nil || !strings.Contains(err.Error(), "host workspace") {
+		t.Fatalf("expected no-workspace residue validation error, got %v", err)
+	}
+}
+
 func validProviderContract() protocol.ProviderContract {
 	return protocol.ProviderContract{
 		ProtocolVersion:        protocol.Version,

@@ -21,6 +21,7 @@ C10: Public client control-plane access ≠ provider/admin mutation ingress.
 C11: Plugin provider catalog details track `workflow-compute`'s typed `ProviderContract`, not a parallel plugin-local provider shape.
 C12: Provider-specific typed steps belong in the owning provider plugin, not this generic compute adapter.
 C13: Provider catalog entries are imported `workflow-compute` contracts; product/application assumptions belong in the calling workflow or provider plugin.
+C14: Task residue policy submitted by this plugin is customer intent only; `workflow-compute` owns provider/product authority resolution, policy hashing, lease enforcement, and residue cleanup.
 
 §I
 
@@ -59,6 +60,7 @@ V19: PR CI checks plugin provider catalog tests against current `GoCodeAlone/wor
 V20: manifest `stepTypes` exactly match runtime `StepTypes`
 V21: plugin step/CLI surfaces must not mention product-capture, BMW, edge lambda, edge CDN, or another provider-specific business domain
 V22: `compute.provider_catalog` accepts typed `protocol.ProviderContract` records from provider plugins without defining a parallel plugin-local provider schema
+V23: `step.compute_dispatch` and `step.compute_map` accept valid short-lived task `residue_policy`, reject malformed residue policy locally, and do not compute policy hashes or override provider/product authority
 
 §T
 
@@ -76,6 +78,7 @@ T10|x|document external Workflow client use cases and public client-surface boun
 T11|x|align provider catalog details with workflow-compute `ProviderContract` and gate drift in PR CI|C11,I.module,V19
 T12|x|remove provider-specific product-capture step/CLI/domain preview flattening from generic compute adapter|C12,I.step,V20,V21
 T13|x|keep provider catalog validation generic so external provider plugins can supply edge/product contracts without plugin-local provider schema|C13,I.module,V19,V22
+T14|x|submit optional short-lived task residue policy through dispatch/map steps without taking over core authority resolution|C14,I.step,V23
 
 §B
 

@@ -24,6 +24,7 @@ func buildTask(cfg taskConfig, workload protocol.WorkloadSpec) protocol.Task {
 		PolicyID:        cfg.PolicyID,
 		Status:          protocol.TaskQueued,
 		Workload:        workload,
+		ResiduePolicy:   cfg.ResiduePolicy,
 		InputHash:       inputHash,
 		RequestedAt:     time.Now().UTC(),
 		TimeoutSeconds:  cfg.TimeoutSeconds,

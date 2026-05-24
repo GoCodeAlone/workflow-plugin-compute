@@ -54,13 +54,14 @@ func (c connectionConfig) client(ctx context.Context, metadata, runtimeConfig ma
 }
 
 type taskConfig struct {
-	ID             string            `json:"id,omitempty"`
-	ProductID      string            `json:"product_id,omitempty"`
-	OrgID          string            `json:"org_id"`
-	PoolID         string            `json:"pool_id"`
-	PolicyID       string            `json:"policy_id"`
-	TimeoutSeconds int               `json:"timeout_seconds"`
-	Labels         map[string]string `json:"labels,omitempty"`
+	ID             string                 `json:"id,omitempty"`
+	ProductID      string                 `json:"product_id,omitempty"`
+	OrgID          string                 `json:"org_id"`
+	PoolID         string                 `json:"pool_id"`
+	PolicyID       string                 `json:"policy_id"`
+	TimeoutSeconds int                    `json:"timeout_seconds"`
+	Labels         map[string]string      `json:"labels,omitempty"`
+	ResiduePolicy  protocol.ResiduePolicy `json:"residue_policy,omitzero"`
 }
 
 func (c taskConfig) validate() error {
@@ -76,6 +77,11 @@ func (c taskConfig) validate() error {
 	}
 	if c.TimeoutSeconds <= 0 {
 		errs = append(errs, errors.New("timeout_seconds must be positive"))
+	}
+	if err := c.ResiduePolicy.Validate(protocol.ResiduePolicyValidation{
+		RequireExplicitWorkerBound: c.ResiduePolicy.Mode == protocol.ResidueModeWorkerBound,
+	}); err != nil {
+		errs = append(errs, fmt.Errorf("residue_policy: %w", err))
 	}
 	return errors.Join(errs...)
 }
