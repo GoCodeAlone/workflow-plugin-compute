@@ -174,6 +174,74 @@ func TestProviderCatalogAcceptsRuntimeProfileResiduePolicy(t *testing.T) {
 	}
 }
 
+func TestProviderCatalogAcceptsAccessScopedOperations(t *testing.T) {
+	contract := validProviderContract()
+	contract.OrgID = "gocodealone"
+	contract.PoolID = "ci-runners"
+	contract.AccessPolicy = coreprotocol.AccessPolicy{
+		ProviderUsageVisibility: coreprotocol.AccessVisibilityNetwork,
+		WorkloadVisibility:      coreprotocol.AccessVisibilityPrivate,
+		ArtifactVisibility:      coreprotocol.AccessVisibilityPrivate,
+	}
+	contract.WorkloadKinds = append(contract.WorkloadKinds, string(coreprotocol.WorkloadProvider))
+	contract.Operations = []coreprotocol.ProviderOperation{{
+		ID:                 "dispatch",
+		InputSchemaRef:     "schema://providers/workflow-plugin-compute/operations/dispatch/input/v1",
+		InputSchemaDigest:  coreprotocol.CanonicalHash(map[string]string{"input": "object"}),
+		OutputSchemaRef:    "schema://providers/workflow-plugin-compute/operations/dispatch/output/v1",
+		OutputSchemaDigest: coreprotocol.CanonicalHash(map[string]string{"output": "object"}),
+		Artifacts:          []string{"logs"},
+		ArtifactSpecs: []coreprotocol.ProviderArtifactSpec{{
+			Name:             "logs",
+			ContentType:      "text/plain",
+			MaxBytes:         1 << 20,
+			RetentionSeconds: 3600,
+			Forwardable:      true,
+		}},
+	}}
+	module, err := newProviderCatalogModule("catalog", map[string]any{
+		"contracts": []any{toMap(t, contract)},
+	})
+	if err != nil {
+		t.Fatalf("newProviderCatalogModule: %v", err)
+	}
+	got := module.config.Contracts[0]
+	if got.AccessPolicy.ProviderUsageVisibility != coreprotocol.AccessVisibilityNetwork {
+		t.Fatalf("access policy not decoded: %+v", got.AccessPolicy)
+	}
+	if !got.SupportsOperation("dispatch") {
+		t.Fatalf("operation not decoded: %+v", got.Operations)
+	}
+	if specs := got.Operations[0].NormalizedArtifactSpecs(); len(specs) != 1 || specs[0].Name != "logs" {
+		t.Fatalf("artifact specs not decoded: %+v", specs)
+	}
+}
+
+func TestProviderCatalogRejectsMismatchedProductVersion(t *testing.T) {
+	contract := validProviderContract()
+	product := coreprotocol.NetworkProduct{
+		ProviderConfig: coreprotocol.ProviderConfig{
+			PluginID:   contract.PluginID,
+			ProviderID: contract.ProviderID,
+			ContractID: contract.ContractID,
+			Version:    "v9.9.9",
+		},
+		OperatingMode: coreprotocol.NetworkModeBatch,
+		WorkloadKinds: []string{string(coreprotocol.WorkloadCommand)},
+		SecurityFloor: coreprotocol.PlacementRequirements{
+			ExecutorProvider:      "sandboxed-command",
+			ExecutionSecurityTier: coreprotocol.ExecutionSandboxedContainer,
+			ProofTier:             coreprotocol.ProofArtifactHash,
+		},
+		NetworkModes: []coreprotocol.NetworkMode{coreprotocol.NetworkModeRelay},
+	}
+
+	err := contract.SupportsProduct(product)
+	if err == nil || !strings.Contains(err.Error(), "version") {
+		t.Fatalf("expected version mismatch error, got %v", err)
+	}
+}
+
 func TestProviderCatalogRejectsReusableResidueWithoutWorkspace(t *testing.T) {
 	contract := validProviderContract()
 	contract.RuntimeContract.Profiles[0].HostWorkspaceSupported = false
