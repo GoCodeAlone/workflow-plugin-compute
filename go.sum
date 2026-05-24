@@ -16,8 +16,8 @@ github.com/GoCodeAlone/workflow v0.62.0 h1:emFkTomDpVmBcEfw7quRO4V/J4qDsWNx/CrBd
 github.com/GoCodeAlone/workflow v0.62.0/go.mod h1:659GGDrw3QJ7b625y9rf8QhKIpt1VCoEG0MxKu5tGQs=
 github.com/GoCodeAlone/workflow-compute v0.0.0-20260524063206-b3e8de8ce8d6 h1:R2YBH5Vnkn/O1ksTRbzn5vaMN/GtnuFNiTDRF/FR0GY=
 github.com/GoCodeAlone/workflow-compute v0.0.0-20260524063206-b3e8de8ce8d6/go.mod h1:T8yGXrRBm2USwkRFvMaoq4aPDt/f7JciZY9Y/l/upYs=
-github.com/GoCodeAlone/workflow-plugin-compute-core v0.0.0-20260524090838-d0045a893984 h1:VPhpVv/1pNvwI4dVhPmHc6S2uh53+6ikWOqnfHyGS7o=
-github.com/GoCodeAlone/workflow-plugin-compute-core v0.0.0-20260524090838-d0045a893984/go.mod h1:1T6uCpUWPCNk6XPYgKq5CL/7LkD24MphKYsYVzF4jnI=
+github.com/GoCodeAlone/workflow-plugin-compute-core v0.0.0-20260524093307-28ef9b0aae8f h1:U0heAsFJNVAsUOmBY4Y0Pq4uWZdBj73W7ddwYFdTqN0=
+github.com/GoCodeAlone/workflow-plugin-compute-core v0.0.0-20260524093307-28ef9b0aae8f/go.mod h1:1T6uCpUWPCNk6XPYgKq5CL/7LkD24MphKYsYVzF4jnI=
 github.com/GoCodeAlone/yaegi v0.17.2 h1:WK6Y6e0t1a6U7r+S2dN3CGWW1PizYD3zO0zneToZPxM=
 github.com/GoCodeAlone/yaegi v0.17.2/go.mod h1:z5Pr6Wse6QJcQvpgxTxzMAevFarH0N37TG88Y9dprx0=
 github.com/IBM/sarama v1.47.0 h1:GcQFEd12+KzfPYeLgN69Fh7vLCtYRhVIx0rO4TZO318=
