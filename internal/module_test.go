@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/GoCodeAlone/workflow-compute/pkg/protocol"
+	coreprotocol "github.com/GoCodeAlone/workflow-plugin-compute-core/protocol"
 	sdk "github.com/GoCodeAlone/workflow/plugin/external/sdk"
 )
 
@@ -116,7 +116,7 @@ func TestModuleSchemas(t *testing.T) {
 	}
 }
 
-func TestProviderCatalogUsesWorkflowComputeProviderContracts(t *testing.T) {
+func TestProviderCatalogUsesComputeCoreProviderContracts(t *testing.T) {
 	contract := validProviderContract()
 	raw := map[string]any{
 		"contracts": []any{toMap(t, contract)},
@@ -143,7 +143,7 @@ func TestProviderCatalogRejectsLegacyGroupedProviderDetails(t *testing.T) {
 	}
 }
 
-func TestProviderCatalogRejectsMalformedWorkflowComputeContract(t *testing.T) {
+func TestProviderCatalogRejectsMalformedComputeCoreContract(t *testing.T) {
 	contract := validProviderContract()
 	contract.ConfigSchemaDigest = "sha256:not-hex"
 	_, err := newProviderCatalogModule("catalog", map[string]any{
@@ -157,9 +157,9 @@ func TestProviderCatalogRejectsMalformedWorkflowComputeContract(t *testing.T) {
 func TestProviderCatalogAcceptsRuntimeProfileResiduePolicy(t *testing.T) {
 	contract := validProviderContract()
 	contract.RuntimeContract.Profiles[0].HostWorkspaceSupported = true
-	contract.RuntimeContract.Profiles[0].ResiduePolicy = protocol.ResiduePolicy{
-		Mode:          protocol.ResidueModeProviderBound,
-		AllowedModes:  []protocol.ResidueMode{protocol.ResidueModeIsolated, protocol.ResidueModeProviderBound},
+	contract.RuntimeContract.Profiles[0].ResiduePolicy = coreprotocol.ResiduePolicy{
+		Mode:          coreprotocol.ResidueModeProviderBound,
+		AllowedModes:  []coreprotocol.ResidueMode{coreprotocol.ResidueModeIsolated, coreprotocol.ResidueModeProviderBound},
 		MaxAgeSeconds: 600,
 		WipeOnFailure: true,
 	}
@@ -169,7 +169,7 @@ func TestProviderCatalogAcceptsRuntimeProfileResiduePolicy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newProviderCatalogModule: %v", err)
 	}
-	if module.config.Contracts[0].RuntimeContract.Profiles[0].ResiduePolicy.Mode != protocol.ResidueModeProviderBound {
+	if module.config.Contracts[0].RuntimeContract.Profiles[0].ResiduePolicy.Mode != coreprotocol.ResidueModeProviderBound {
 		t.Fatalf("residue policy not decoded: %+v", module.config.Contracts[0].RuntimeContract.Profiles[0].ResiduePolicy)
 	}
 }
@@ -177,9 +177,9 @@ func TestProviderCatalogAcceptsRuntimeProfileResiduePolicy(t *testing.T) {
 func TestProviderCatalogRejectsReusableResidueWithoutWorkspace(t *testing.T) {
 	contract := validProviderContract()
 	contract.RuntimeContract.Profiles[0].HostWorkspaceSupported = false
-	contract.RuntimeContract.Profiles[0].ResiduePolicy = protocol.ResiduePolicy{
-		Mode:         protocol.ResidueModeProviderBound,
-		AllowedModes: []protocol.ResidueMode{protocol.ResidueModeProviderBound},
+	contract.RuntimeContract.Profiles[0].ResiduePolicy = coreprotocol.ResiduePolicy{
+		Mode:         coreprotocol.ResidueModeProviderBound,
+		AllowedModes: []coreprotocol.ResidueMode{coreprotocol.ResidueModeProviderBound},
 	}
 	_, err := newProviderCatalogModule("catalog", map[string]any{
 		"contracts": []any{toMap(t, contract)},
@@ -189,9 +189,9 @@ func TestProviderCatalogRejectsReusableResidueWithoutWorkspace(t *testing.T) {
 	}
 }
 
-func validProviderContract() protocol.ProviderContract {
-	return protocol.ProviderContract{
-		ProtocolVersion:        protocol.Version,
+func validProviderContract() coreprotocol.ProviderContract {
+	return coreprotocol.ProviderContract{
+		ProtocolVersion:        coreprotocol.Version,
 		ID:                     "workflow-compute-control-plane-v1",
 		PluginID:               "workflow-plugin-compute",
 		ProviderID:             "workflow-compute-control-plane",
@@ -200,29 +200,29 @@ func validProviderContract() protocol.ProviderContract {
 		DisplayName:            "workflow-compute Control Plane",
 		ConfigSchemaRef:        "schema://providers/workflow-plugin-compute/workflow-compute-control-plane/v1",
 		ConfigSchemaDigest:     "sha256:" + strings.Repeat("b", 64),
-		OperatingModes:         []protocol.NetworkOperatingMode{protocol.NetworkModeBatch},
-		WorkloadKinds:          []string{string(protocol.WorkloadCommand), string(protocol.WorkloadContainerBuild)},
+		OperatingModes:         []coreprotocol.NetworkOperatingMode{coreprotocol.NetworkModeBatch},
+		WorkloadKinds:          []string{string(coreprotocol.WorkloadCommand), string(coreprotocol.WorkloadContainerBuild)},
 		ExecutorProviders:      []string{"sandboxed-command"},
-		ExecutionSecurityTiers: []protocol.ExecutionSecurityTier{protocol.ExecutionSandboxedContainer},
-		ProofTiers:             []protocol.ProofTier{protocol.ProofArtifactHash},
-		NetworkModes:           []protocol.NetworkMode{protocol.NetworkModeRelay},
-		RuntimeContract: protocol.ProviderRuntimeContract{
-			Profiles: []protocol.ProviderRuntimeProfile{{
+		ExecutionSecurityTiers: []coreprotocol.ExecutionSecurityTier{coreprotocol.ExecutionSandboxedContainer},
+		ProofTiers:             []coreprotocol.ProofTier{coreprotocol.ProofArtifactHash},
+		NetworkModes:           []coreprotocol.NetworkMode{coreprotocol.NetworkModeRelay},
+		RuntimeContract: coreprotocol.ProviderRuntimeContract{
+			Profiles: []coreprotocol.ProviderRuntimeProfile{{
 				ID:                     "sandboxed-command-oci",
-				RuntimeProfile:         protocol.RuntimeProfileSandboxedOCI,
+				RuntimeProfile:         coreprotocol.RuntimeProfileSandboxedOCI,
 				ExecutorProvider:       "sandboxed-command",
-				ExecutionSecurityTier:  protocol.ExecutionSandboxedContainer,
-				ProofTier:              protocol.ProofArtifactHash,
-				AllowedRuntimeTools:    []protocol.ContainerRuntimeTool{protocol.ContainerRuntimePodman, protocol.ContainerRuntimeDocker, protocol.ContainerRuntimeNerdctl},
+				ExecutionSecurityTier:  coreprotocol.ExecutionSandboxedContainer,
+				ProofTier:              coreprotocol.ProofArtifactHash,
+				AllowedRuntimeTools:    []coreprotocol.ContainerRuntimeTool{coreprotocol.ContainerRuntimePodman, coreprotocol.ContainerRuntimeDocker, coreprotocol.ContainerRuntimeNerdctl},
 				ImageDigestRequired:    true,
 				RootFSDigestRequired:   true,
 				AllowedMountRefs:       []string{"workspace"},
-				WritableRootFS:         protocol.RuntimePermissionForbidden,
-				Privileged:             protocol.RuntimePermissionForbidden,
-				HostNamespaces:         protocol.RuntimePermissionForbidden,
-				HostSocket:             protocol.RuntimePermissionForbidden,
-				SeccompDisable:         protocol.RuntimePermissionForbidden,
-				NoNewPrivilegesDisable: protocol.RuntimePermissionForbidden,
+				WritableRootFS:         coreprotocol.RuntimePermissionForbidden,
+				Privileged:             coreprotocol.RuntimePermissionForbidden,
+				HostNamespaces:         coreprotocol.RuntimePermissionForbidden,
+				HostSocket:             coreprotocol.RuntimePermissionForbidden,
+				SeccompDisable:         coreprotocol.RuntimePermissionForbidden,
+				NoNewPrivilegesDisable: coreprotocol.RuntimePermissionForbidden,
 				ConformanceProfiles:    []string{"sandboxed-oci-v1"},
 			}},
 		},

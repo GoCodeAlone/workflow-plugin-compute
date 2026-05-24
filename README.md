@@ -28,17 +28,19 @@ Examples:
   eligible enrolled agents, records the resulting task/proof ids, and uses the
   core ledger for accounting.
 - A provider plugin, such as product capture or edge compute, exposes a typed
-  `ProviderContract`; this plugin submits or waits on the resulting generic
-  workflow-compute task without embedding provider business logic.
+  `workflow-plugin-compute-core/protocol.ProviderContract`; this plugin submits
+  or waits on the resulting generic workflow-compute task without embedding
+  provider business logic.
 
 `compute.provider` in this repository means "Workflow connection to a
 wfcompute control plane." It is not a wfcompute worker/provider node. Provider
 nodes, supervisors, package updates, proof verification, rewards, and dashboard
 state belong to `workflow-compute`.
 
-`compute.provider_catalog` consumes `workflow-compute/pkg/protocol.ProviderContract`
-records. It intentionally does not define a separate plugin-local executor,
-dependency, verification, reward, or network provider shape.
+`compute.provider_catalog` consumes
+`workflow-plugin-compute-core/protocol.ProviderContract` records. It
+intentionally does not define a separate plugin-local executor, dependency,
+verification, reward, or network provider shape.
 
 Provider-specific contracts belong in the owning provider plugin. For example,
 product capture owns product URL semantics and edge compute owns edge
