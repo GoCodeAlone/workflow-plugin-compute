@@ -37,4 +37,4 @@ cd "$tmp/plugin"
 
 go mod edit -replace "github.com/GoCodeAlone/workflow-compute=$COMPUTE_DIR"
 GOWORK=off go mod tidy
-GOWORK=off go test ./internal -run 'Test(ModuleTypes|PluginManifestModuleTypesMatchRuntime|ProviderCatalog)' -count=1
+GOWORK=off go test ./internal -count=1

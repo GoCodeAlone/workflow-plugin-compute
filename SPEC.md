@@ -56,7 +56,7 @@ V15: `wfctl compute submit` supports command/container-build without leaking wor
 V16: `wfctl compute accounting export` includes raw contribution units and policy reward outputs without leaking token
 V17: docs/examples distinguish `compute.provider` Workflow connection from wfcompute provider/worker node
 V18: plugin guidance for public control-plane use excludes bootstrap token, provider mutation, package/campaign/trust-root mutation, and raw agent/supervisor control APIs
-V19: PR CI checks plugin provider catalog tests against public `workflow-plugin-compute-core/protocol.ProviderContract`
+V19: PR CI checks the plugin's internal adapter tests against current `workflow-compute` with a local module replace so private runtime API drift is caught after provider catalog types move to public compute-core.
 V20: manifest `stepTypes` exactly match runtime `StepTypes`
 V21: plugin step/CLI surfaces must not mention product-capture, BMW, edge lambda, edge CDN, or another provider-specific business domain
 V22: `compute.provider_catalog` accepts typed `workflow-plugin-compute-core/protocol.ProviderContract` records from provider plugins without defining a parallel plugin-local provider schema
