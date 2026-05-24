@@ -8,5 +8,5 @@ import (
 )
 
 func main() {
-	sdk.ServePluginFull(internal.NewPlugin(), internal.NewCLI(), nil)
+	sdk.ServePluginFull(internal.NewPlugin(), internal.NewCLI(), nil, sdk.WithBuildVersion(sdk.ResolveBuildVersion(internal.Version)))
 }
