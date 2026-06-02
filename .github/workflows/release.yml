@@ -38,6 +38,23 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # workflow#765: runtime truth-check via plugin verify-capabilities.
+      - name: Verify capabilities (runtime truth-check)
+        if: >-
+          !github.event.deleted
+          && !contains(github.ref_name, '-')
+          && github.repository == 'GoCodeAlone/workflow-plugin-compute'
+        run: |
+          RUNNER_ARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
+          BIN=$(jq -r --arg arch "$RUNNER_ARCH" \
+            '[.[] | select(.type=="Binary" and .goos=="linux" and .goarch==$arch and (.name|startswith("workflow-plugin-compute")))] | .[0].path // ""' \
+            dist/artifacts.json)
+          if [ -z "$BIN" ] || [ "$BIN" = "null" ]; then
+            echo "::warning::No matching linux/$RUNNER_ARCH binary in dist/artifacts.json; skipping verify-capabilities"
+            jq '.[] | {name, type, goos, goarch, path}' dist/artifacts.json
+            exit 0
+          fi
+          "${{ runner.temp }}/wfctl-bin/wfctl" plugin verify-capabilities --binary "$BIN" .
 
   notify-workflow-registry:
     name: Notify workflow-registry
@@ -50,19 +67,6 @@ jobs:
       && !contains(github.ref_name, '-')
       && github.repository == 'GoCodeAlone/workflow-plugin-compute'
     steps:
-      # workflow#765: runtime truth-check via plugin verify-capabilities.
-      - name: Verify capabilities (runtime truth-check)
-        run: |
-          RUNNER_ARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
-          BIN=$(jq -r --arg arch "$RUNNER_ARCH" \
-            '[.[] | select(.type=="Binary" and .goos=="linux" and .goarch==$arch and (.name|startswith("workflow-plugin-compute")))] | .[0].path // ""' \
-            dist/artifacts.json)
-          if [ -z "$BIN" ] || [ "$BIN" = "null" ]; then
-            echo "::warning::No matching linux/$RUNNER_ARCH binary in dist/artifacts.json; skipping verify-capabilities"
-            jq '.[] | {name, type, goos, goarch, path}' dist/artifacts.json
-            exit 0
-          fi
-          "${{ runner.temp }}/wfctl-bin/wfctl" plugin verify-capabilities --binary "$BIN" .
       - name: Trigger registry manifest sync
         uses: peter-evans/repository-dispatch@28959ce8df70de7be546dd1250a005dd32156697  # v4
         with:
