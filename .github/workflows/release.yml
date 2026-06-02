@@ -40,6 +40,10 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       # workflow#765: runtime truth-check via plugin verify-capabilities.
       - name: Verify capabilities (runtime truth-check)
+        if: >-
+          !github.event.deleted
+          && !contains(github.ref_name, '-')
+          && github.repository == 'GoCodeAlone/workflow-plugin-compute'
         run: |
           RUNNER_ARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
           BIN=$(jq -r --arg arch "$RUNNER_ARCH" \
