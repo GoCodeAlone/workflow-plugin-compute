@@ -38,18 +38,6 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  notify-workflow-registry:
-    name: Notify workflow-registry
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    needs: release
-    if: >-
-      !github.event.deleted
-      && !contains(github.ref_name, '-')
-      && github.repository == 'GoCodeAlone/workflow-plugin-compute'
-    steps:
       # workflow#765: runtime truth-check via plugin verify-capabilities.
       - name: Verify capabilities (runtime truth-check)
         run: |
@@ -63,6 +51,18 @@ jobs:
             exit 0
           fi
           "${{ runner.temp }}/wfctl-bin/wfctl" plugin verify-capabilities --binary "$BIN" .
+
+  notify-workflow-registry:
+    name: Notify workflow-registry
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    needs: release
+    if: >-
+      !github.event.deleted
+      && !contains(github.ref_name, '-')
+      && github.repository == 'GoCodeAlone/workflow-plugin-compute'
+    steps:
       - name: Trigger registry manifest sync
         uses: peter-evans/repository-dispatch@28959ce8df70de7be546dd1250a005dd32156697  # v4
         with:
