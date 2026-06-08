@@ -68,6 +68,7 @@ func TestT542_CLIAgentSetupClaimsInviteWithoutProjectManifestOrSecretOutput(t *t
 				Invite:       protocol.AgentSetupInvite{ID: "invite-1", Policy: protocol.AgentOnboardingRequest{AgentID: "worker-1", OrgID: "org-1", PoolID: "pool-1", AccountID: "acct-operator"}},
 				Session:      protocol.AgentSetupInstallSession{ID: claimReq.InstallSessionID, InviteID: "invite-1", WorkerID: "worker-1", OrgID: "org-1", PoolID: "pool-1", CredentialID: "cred-1"},
 				Onboarding:   protocol.AgentOnboardingRequest{AgentID: "worker-1", OrgID: "org-1", PoolID: "pool-1", AccountID: "acct-operator"},
+				TokenEnv:     "SERVER_AGENT_TOKEN",
 				OneTimeToken: "raw-secret-token",
 			})
 		default:
@@ -82,7 +83,6 @@ func TestT542_CLIAgentSetupClaimsInviteWithoutProjectManifestOrSecretOutput(t *t
 		"--server", srv.URL,
 		"--invite-url", srv.URL + "/install?invite_id=invite-1&redeem_code=code-1",
 		"--install-session-id", "session-1",
-		"--token-env", "COMPUTE_AGENT_TOKEN",
 		"--non-interactive",
 		"--json",
 	})
@@ -100,7 +100,7 @@ func TestT542_CLIAgentSetupClaimsInviteWithoutProjectManifestOrSecretOutput(t *t
 	for _, required := range []string{
 		`"worker_id": "worker-1"`,
 		`"credential_id": "cred-1"`,
-		`"token_env": "COMPUTE_AGENT_TOKEN"`,
+		`"token_env": "SERVER_AGENT_TOKEN"`,
 		`"token_present": true`,
 	} {
 		if !strings.Contains(out, required) {

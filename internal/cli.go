@@ -53,10 +53,10 @@ func (c *computeCLI) RunCLI(args []string) int {
 
 func (c *computeCLI) run(ctx context.Context, args []string) error {
 	if len(args) == 0 || args[0] != "compute" {
-		return errors.New("usage: wfctl compute <agent|enroll|pools|run|audit|accounting|github-runner>")
+		return errors.New("usage: wfctl compute <agent|enroll|pools|run|submit|audit|accounting|github-runner>")
 	}
 	if len(args) == 1 {
-		return errors.New("usage: wfctl compute <agent|enroll|pools|run|audit|accounting|github-runner>")
+		return errors.New("usage: wfctl compute <agent|enroll|pools|run|submit|audit|accounting|github-runner>")
 	}
 	switch args[1] {
 	case "agent":
@@ -113,7 +113,7 @@ func (c *computeCLI) runAgentSetup(ctx context.Context, args []string) error {
 	inviteURL := fs.String("invite-url", "", "setup invite URL")
 	installSessionID := fs.String("install-session-id", "", "stable install session id")
 	credentialStore := fs.String("credential-store", "", "credential store name")
-	tokenEnv := fs.String("token-env", "COMPUTE_AGENT_TOKEN", "environment variable name reserved for downstream token handoff")
+	tokenEnv := fs.String("token-env", "", "environment variable name reserved for downstream token handoff")
 	tokenCredentialRef := fs.String("token-credential-ref", "", "credential reference for durable token storage")
 	install := fs.Bool("install", false, "render install intent")
 	start := fs.Bool("start", false, "render start intent")
@@ -185,7 +185,7 @@ func (c *computeCLI) runAgentSetup(ctx context.Context, args []string) error {
 		WorkerID:         claim.Session.WorkerID,
 		CredentialID:     claim.Session.CredentialID,
 		CredentialRef:    firstNonEmpty(*tokenCredentialRef, claim.CredentialRef),
-		TokenEnv:         firstNonEmpty(*tokenEnv, claim.TokenEnv),
+		TokenEnv:         firstNonEmpty(*tokenEnv, claim.TokenEnv, "COMPUTE_AGENT_TOKEN"),
 		TokenPresent:     claim.OneTimeToken != "" || claim.TokenPresent,
 		InstallRequested: *install,
 		StartRequested:   *start,
