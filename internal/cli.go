@@ -93,16 +93,17 @@ func (c *computeCLI) runAgent(ctx context.Context, args []string) error {
 }
 
 type agentSetupPlan struct {
-	InviteID         string `json:"invite_id,omitempty"`
-	InstallSessionID string `json:"install_session_id"`
-	WorkerID         string `json:"worker_id"`
-	CredentialID     string `json:"credential_id,omitempty"`
-	CredentialRef    string `json:"credential_ref,omitempty"`
-	TokenEnv         string `json:"token_env,omitempty"`
-	TokenPresent     bool   `json:"token_present"`
-	InstallRequested bool   `json:"install_requested,omitempty"`
-	StartRequested   bool   `json:"start_requested,omitempty"`
-	Verified         bool   `json:"verified,omitempty"`
+	InviteID         string                               `json:"invite_id,omitempty"`
+	InstallSessionID string                               `json:"install_session_id"`
+	WorkerID         string                               `json:"worker_id"`
+	CredentialID     string                               `json:"credential_id,omitempty"`
+	CredentialRef    string                               `json:"credential_ref,omitempty"`
+	TokenEnv         string                               `json:"token_env,omitempty"`
+	TokenPresent     bool                                 `json:"token_present"`
+	PackageCandidate *protocol.AgentSetupPackageCandidate `json:"package_candidate,omitempty"`
+	InstallRequested bool                                 `json:"install_requested,omitempty"`
+	StartRequested   bool                                 `json:"start_requested,omitempty"`
+	Verified         bool                                 `json:"verified,omitempty"`
 }
 
 func (c *computeCLI) runAgentSetup(ctx context.Context, args []string) error {
@@ -187,6 +188,7 @@ func (c *computeCLI) runAgentSetup(ctx context.Context, args []string) error {
 		CredentialRef:    firstNonEmpty(*tokenCredentialRef, claim.CredentialRef),
 		TokenEnv:         firstNonEmpty(*tokenEnv, claim.TokenEnv, "COMPUTE_AGENT_TOKEN"),
 		TokenPresent:     claim.OneTimeToken != "" || claim.TokenPresent,
+		PackageCandidate: firstAgentSetupPackageCandidate(claim.PackageCandidates, preview.PackageCandidates),
 		InstallRequested: *install,
 		StartRequested:   *start,
 		Verified:         claim.Session.FinalizedAt.IsZero() == false,
@@ -198,6 +200,17 @@ func (c *computeCLI) runAgentSetup(ctx context.Context, args []string) error {
 		return writeJSON(c.stdout, plan)
 	}
 	return writeJSON(c.stdout, map[string]any{"agent_setup": plan})
+}
+
+func firstAgentSetupPackageCandidate(candidateSets ...[]protocol.AgentSetupPackageCandidate) *protocol.AgentSetupPackageCandidate {
+	for _, candidates := range candidateSets {
+		if len(candidates) == 0 {
+			continue
+		}
+		candidate := candidates[0]
+		return &candidate
+	}
+	return nil
 }
 
 func (c *computeCLI) runEnroll(ctx context.Context, args []string) error {

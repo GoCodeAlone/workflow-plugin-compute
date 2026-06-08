@@ -41,6 +41,16 @@ func TestT542_CLIAgentSetupClaimsInviteWithoutProjectManifestOrSecretOutput(t *t
 	var paths []string
 	var previewReq protocol.AgentSetupInvitePreviewRequest
 	var claimReq protocol.AgentSetupInviteClaimRequest
+	candidate := protocol.AgentSetupPackageCandidate{
+		Component: "agent-core",
+		Artifact: protocol.PackageArtifact{
+			OS:     "darwin",
+			Arch:   "arm64",
+			Format: protocol.PackageArtifactBinary,
+			SHA256: "sha256:" + strings.Repeat("a", 64),
+			URL:    "https://packages.example.invalid/compute-agent",
+		},
+	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		paths = append(paths, r.URL.Path)
 		if r.Header.Get("Authorization") != "" {
@@ -55,7 +65,8 @@ func TestT542_CLIAgentSetupClaimsInviteWithoutProjectManifestOrSecretOutput(t *t
 				t.Fatalf("decode preview: %v", err)
 			}
 			_ = json.NewEncoder(w).Encode(protocol.AgentSetupInvitePreviewResponse{
-				Invite: protocol.AgentSetupInvite{ID: "invite-1", Policy: protocol.AgentOnboardingRequest{AgentID: "worker-1", OrgID: "org-1", PoolID: "pool-1", AccountID: "acct-operator"}},
+				Invite:            protocol.AgentSetupInvite{ID: "invite-1", Policy: protocol.AgentOnboardingRequest{AgentID: "worker-1", OrgID: "org-1", PoolID: "pool-1", AccountID: "acct-operator"}},
+				PackageCandidates: []protocol.AgentSetupPackageCandidate{candidate},
 			})
 		case "/v1/onboarding/setup-invites/claim":
 			if r.Method != http.MethodPost {
@@ -65,11 +76,12 @@ func TestT542_CLIAgentSetupClaimsInviteWithoutProjectManifestOrSecretOutput(t *t
 				t.Fatalf("decode claim: %v", err)
 			}
 			_ = json.NewEncoder(w).Encode(protocol.AgentSetupInviteClaimResponse{
-				Invite:       protocol.AgentSetupInvite{ID: "invite-1", Policy: protocol.AgentOnboardingRequest{AgentID: "worker-1", OrgID: "org-1", PoolID: "pool-1", AccountID: "acct-operator"}},
-				Session:      protocol.AgentSetupInstallSession{ID: claimReq.InstallSessionID, InviteID: "invite-1", WorkerID: "worker-1", OrgID: "org-1", PoolID: "pool-1", CredentialID: "cred-1"},
-				Onboarding:   protocol.AgentOnboardingRequest{AgentID: "worker-1", OrgID: "org-1", PoolID: "pool-1", AccountID: "acct-operator"},
-				TokenEnv:     "SERVER_AGENT_TOKEN",
-				OneTimeToken: "raw-secret-token",
+				Invite:            protocol.AgentSetupInvite{ID: "invite-1", Policy: protocol.AgentOnboardingRequest{AgentID: "worker-1", OrgID: "org-1", PoolID: "pool-1", AccountID: "acct-operator"}},
+				Session:           protocol.AgentSetupInstallSession{ID: claimReq.InstallSessionID, InviteID: "invite-1", WorkerID: "worker-1", OrgID: "org-1", PoolID: "pool-1", CredentialID: "cred-1"},
+				Onboarding:        protocol.AgentOnboardingRequest{AgentID: "worker-1", OrgID: "org-1", PoolID: "pool-1", AccountID: "acct-operator"},
+				PackageCandidates: []protocol.AgentSetupPackageCandidate{candidate},
+				TokenEnv:          "SERVER_AGENT_TOKEN",
+				OneTimeToken:      "raw-secret-token",
 			})
 		default:
 			t.Fatalf("path: %s", r.URL.Path)
@@ -102,6 +114,9 @@ func TestT542_CLIAgentSetupClaimsInviteWithoutProjectManifestOrSecretOutput(t *t
 		`"credential_id": "cred-1"`,
 		`"token_env": "SERVER_AGENT_TOKEN"`,
 		`"token_present": true`,
+		`"package_candidate": {`,
+		`"component": "agent-core"`,
+		`"sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"`,
 	} {
 		if !strings.Contains(out, required) {
 			t.Fatalf("stdout missing %q in %s", required, out)
