@@ -7,9 +7,209 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/GoCodeAlone/workflow-compute/pkg/protocol"
 )
+
+func TestT542_CLIAgentSetupHelpWorksProjectlessly(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := newCLI(&stdout, &stderr).RunCLI([]string{"compute", "agent", "setup", "-help"})
+
+	if code != 0 {
+		t.Fatalf("RunCLI code=%d stderr=%s", code, stderr.String())
+	}
+	help := stderr.String()
+	for _, required := range []string{
+		"compute agent setup",
+		"-server",
+		"-invite-url",
+		"-install-session-id",
+		"-non-interactive",
+		"-json",
+	} {
+		if !strings.Contains(help, required) {
+			t.Fatalf("help missing %q in %s", required, help)
+		}
+	}
+	if strings.Contains(help, "\n  -token string") {
+		t.Fatalf("setup invite help must not expose broad API token flags: %s", help)
+	}
+}
+
+func TestT542_CLIAgentSetupClaimsInviteWithoutProjectManifestOrSecretOutput(t *testing.T) {
+	var paths []string
+	var previewReq protocol.AgentSetupInvitePreviewRequest
+	var claimReq protocol.AgentSetupInviteClaimRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		if r.Header.Get("Authorization") != "" {
+			t.Fatalf("agent setup invite flow must not require broad bearer auth, got %q", r.Header.Get("Authorization"))
+		}
+		switch r.URL.Path {
+		case "/v1/onboarding/setup-invites/preview":
+			if r.Method != http.MethodPost {
+				t.Fatalf("preview method: %s", r.Method)
+			}
+			if err := json.NewDecoder(r.Body).Decode(&previewReq); err != nil {
+				t.Fatalf("decode preview: %v", err)
+			}
+			_ = json.NewEncoder(w).Encode(protocol.AgentSetupInvitePreviewResponse{
+				Invite: protocol.AgentSetupInvite{ID: "invite-1", Policy: protocol.AgentOnboardingRequest{AgentID: "worker-1", OrgID: "org-1", PoolID: "pool-1", AccountID: "acct-operator"}},
+			})
+		case "/v1/onboarding/setup-invites/claim":
+			if r.Method != http.MethodPost {
+				t.Fatalf("claim method: %s", r.Method)
+			}
+			if err := json.NewDecoder(r.Body).Decode(&claimReq); err != nil {
+				t.Fatalf("decode claim: %v", err)
+			}
+			_ = json.NewEncoder(w).Encode(protocol.AgentSetupInviteClaimResponse{
+				Invite:       protocol.AgentSetupInvite{ID: "invite-1", Policy: protocol.AgentOnboardingRequest{AgentID: "worker-1", OrgID: "org-1", PoolID: "pool-1", AccountID: "acct-operator"}},
+				Session:      protocol.AgentSetupInstallSession{ID: claimReq.InstallSessionID, InviteID: "invite-1", WorkerID: "worker-1", OrgID: "org-1", PoolID: "pool-1", CredentialID: "cred-1"},
+				Onboarding:   protocol.AgentOnboardingRequest{AgentID: "worker-1", OrgID: "org-1", PoolID: "pool-1", AccountID: "acct-operator"},
+				TokenEnv:     "SERVER_AGENT_TOKEN",
+				OneTimeToken: "raw-secret-token",
+			})
+		default:
+			t.Fatalf("path: %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := newCLI(&stdout, &stderr).RunCLI([]string{
+		"compute", "agent", "setup",
+		"--server", srv.URL,
+		"--invite-url", srv.URL + "/install?invite_id=invite-1&redeem_code=code-1",
+		"--install-session-id", "session-1",
+		"--non-interactive",
+		"--json",
+	})
+
+	if code != 0 {
+		t.Fatalf("RunCLI code=%d stderr=%s", code, stderr.String())
+	}
+	if strings.Join(paths, ",") != "/v1/onboarding/setup-invites/preview,/v1/onboarding/setup-invites/claim" {
+		t.Fatalf("paths: %v", paths)
+	}
+	if previewReq.InviteURL == "" || claimReq.InviteURL == "" || claimReq.InstallSessionID != "session-1" || claimReq.ServerURL != srv.URL {
+		t.Fatalf("preview=%+v claim=%+v", previewReq, claimReq)
+	}
+	out := stdout.String()
+	for _, required := range []string{
+		`"worker_id": "worker-1"`,
+		`"credential_id": "cred-1"`,
+		`"token_env": "SERVER_AGENT_TOKEN"`,
+		`"token_present": true`,
+	} {
+		if !strings.Contains(out, required) {
+			t.Fatalf("stdout missing %q in %s", required, out)
+		}
+	}
+	for _, forbidden := range []string{"raw-secret-token", "code-1", "redeem_code", "org-1", "pool-1"} {
+		if strings.Contains(out, forbidden) || strings.Contains(stderr.String(), forbidden) {
+			t.Fatalf("output leaked %q: stdout=%s stderr=%s", forbidden, out, stderr.String())
+		}
+	}
+}
+
+func TestT542_CLIAgentSetupVerifyFinalizesInviteWithoutSecretOutput(t *testing.T) {
+	var paths []string
+	var finalizeReq protocol.AgentSetupInviteFinalizeRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		switch r.URL.Path {
+		case "/v1/onboarding/setup-invites/preview":
+			_ = json.NewEncoder(w).Encode(protocol.AgentSetupInvitePreviewResponse{
+				Invite: protocol.AgentSetupInvite{ID: "invite-verify", Policy: protocol.AgentOnboardingRequest{AgentID: "worker-verify"}},
+			})
+		case "/v1/onboarding/setup-invites/claim":
+			_ = json.NewEncoder(w).Encode(protocol.AgentSetupInviteClaimResponse{
+				Invite:  protocol.AgentSetupInvite{ID: "invite-verify", Policy: protocol.AgentOnboardingRequest{AgentID: "worker-verify"}},
+				Session: protocol.AgentSetupInstallSession{ID: "session-verify", InviteID: "invite-verify", WorkerID: "worker-verify", CredentialID: "cred-verify"},
+			})
+		case "/v1/onboarding/setup-invites/finalize":
+			if err := json.NewDecoder(r.Body).Decode(&finalizeReq); err != nil {
+				t.Fatalf("decode finalize: %v", err)
+			}
+			_ = json.NewEncoder(w).Encode(protocol.AgentSetupInviteClaimResponse{
+				Invite:       protocol.AgentSetupInvite{ID: "invite-verify", Policy: protocol.AgentOnboardingRequest{AgentID: "worker-verify"}},
+				Session:      protocol.AgentSetupInstallSession{ID: "session-verify", InviteID: "invite-verify", WorkerID: "worker-verify", CredentialID: "cred-verify", FinalizedAt: time.Now().UTC()},
+				OneTimeToken: "finalize-secret",
+			})
+		default:
+			t.Fatalf("path: %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := newCLI(&stdout, &stderr).RunCLI([]string{
+		"compute", "agent", "setup",
+		"--server", srv.URL,
+		"--invite", "invite-verify",
+		"--install-session-id", "session-verify",
+		"--non-interactive",
+		"--verify",
+		"--json",
+	})
+
+	if code != 0 {
+		t.Fatalf("RunCLI code=%d stderr=%s", code, stderr.String())
+	}
+	if strings.Join(paths, ",") != "/v1/onboarding/setup-invites/preview,/v1/onboarding/setup-invites/claim,/v1/onboarding/setup-invites/finalize" {
+		t.Fatalf("paths: %v", paths)
+	}
+	if finalizeReq.InviteID != "invite-verify" || finalizeReq.InstallSessionID != "session-verify" || finalizeReq.WorkerID != "worker-verify" || !finalizeReq.Verified {
+		t.Fatalf("finalize request: %+v", finalizeReq)
+	}
+	out := stdout.String()
+	if !strings.Contains(out, `"verified": true`) {
+		t.Fatalf("stdout missing verified=true: %s", out)
+	}
+	if strings.Contains(out, "finalize-secret") || strings.Contains(stderr.String(), "finalize-secret") {
+		t.Fatalf("output leaked finalize token: stdout=%s stderr=%s", out, stderr.String())
+	}
+}
+
+func TestT542_CLIAgentSetupRejectsMalformedClaimResponse(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/onboarding/setup-invites/preview":
+			_ = json.NewEncoder(w).Encode(protocol.AgentSetupInvitePreviewResponse{
+				Invite: protocol.AgentSetupInvite{ID: "invite-bad"},
+			})
+		case "/v1/onboarding/setup-invites/claim":
+			_ = json.NewEncoder(w).Encode(protocol.AgentSetupInviteClaimResponse{
+				Invite:       protocol.AgentSetupInvite{ID: "invite-bad"},
+				OneTimeToken: "malformed-secret",
+			})
+		default:
+			t.Fatalf("path: %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := newCLI(&stdout, &stderr).RunCLI([]string{
+		"compute", "agent", "setup",
+		"--server", srv.URL,
+		"--invite", "invite-bad",
+		"--non-interactive",
+		"--json",
+	})
+
+	if code == 0 {
+		t.Fatal("RunCLI succeeded with malformed claim response")
+	}
+	if !strings.Contains(stderr.String(), "missing worker_id") {
+		t.Fatalf("stderr: %s", stderr.String())
+	}
+	if strings.Contains(stdout.String(), "malformed-secret") || strings.Contains(stderr.String(), "malformed-secret") {
+		t.Fatalf("output leaked malformed claim token: stdout=%s stderr=%s", stdout.String(), stderr.String())
+	}
+}
 
 func TestT6_CLIProviderRunsComputeCommand(t *testing.T) {
 	var got protocol.Task

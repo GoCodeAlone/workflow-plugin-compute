@@ -219,6 +219,30 @@ func (c *computeClient) bridgeGitHubRunnerJob(ctx context.Context, req githubRun
 	return out.Task, nil
 }
 
+func (c *computeClient) agentSetupPreview(ctx context.Context, req protocol.AgentSetupInvitePreviewRequest) (protocol.AgentSetupInvitePreviewResponse, error) {
+	var out protocol.AgentSetupInvitePreviewResponse
+	if err := c.doJSON(ctx, http.MethodPost, "/v1/onboarding/setup-invites/preview", req, http.StatusOK, &out); err != nil {
+		return protocol.AgentSetupInvitePreviewResponse{}, err
+	}
+	return out, nil
+}
+
+func (c *computeClient) agentSetupClaim(ctx context.Context, req protocol.AgentSetupInviteClaimRequest) (protocol.AgentSetupInviteClaimResponse, error) {
+	var out protocol.AgentSetupInviteClaimResponse
+	if err := c.doJSON(ctx, http.MethodPost, "/v1/onboarding/setup-invites/claim", req, http.StatusOK, &out); err != nil {
+		return protocol.AgentSetupInviteClaimResponse{}, err
+	}
+	return out, nil
+}
+
+func (c *computeClient) agentSetupFinalize(ctx context.Context, req protocol.AgentSetupInviteFinalizeRequest) (protocol.AgentSetupInviteClaimResponse, error) {
+	var out protocol.AgentSetupInviteClaimResponse
+	if err := c.doJSON(ctx, http.MethodPost, "/v1/onboarding/setup-invites/finalize", req, http.StatusOK, &out); err != nil {
+		return protocol.AgentSetupInviteClaimResponse{}, err
+	}
+	return out, nil
+}
+
 func (c *computeClient) doJSON(ctx context.Context, method, path string, body any, want int, out any) error {
 	var requestBody *bytes.Reader
 	if body != nil {

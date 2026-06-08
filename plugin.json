@@ -1,7 +1,7 @@
 {
   "name": "workflow-plugin-compute",
-  "version": "0.1.6",
-  "description": "Workflow adapter for workflow-compute dispatch, wait, map, provider, pool, and provider catalog integration",
+  "version": "0.1.8",
+  "description": "Workflow adapter for workflow-compute dispatch, wait, map, provider, pool, setup, and provider catalog integration",
   "author": "GoCodeAlone",
   "license": "MIT",
   "type": "external",
@@ -18,7 +18,7 @@
     "cliCommands": [
       {
         "name": "compute",
-        "description": "Operate a workflow-compute control plane"
+        "description": "Operate a workflow-compute control plane, including projectless agent setup"
       }
     ]
   },

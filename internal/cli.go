@@ -53,12 +53,14 @@ func (c *computeCLI) RunCLI(args []string) int {
 
 func (c *computeCLI) run(ctx context.Context, args []string) error {
 	if len(args) == 0 || args[0] != "compute" {
-		return errors.New("usage: wfctl compute <enroll|pools|run|audit|accounting|github-runner>")
+		return errors.New("usage: wfctl compute <agent|enroll|pools|run|submit|audit|accounting|github-runner>")
 	}
 	if len(args) == 1 {
-		return errors.New("usage: wfctl compute <enroll|pools|run|audit|accounting|github-runner>")
+		return errors.New("usage: wfctl compute <agent|enroll|pools|run|submit|audit|accounting|github-runner>")
 	}
 	switch args[1] {
+	case "agent":
+		return c.runAgent(ctx, args[2:])
 	case "enroll":
 		return c.runEnroll(ctx, args[2:])
 	case "pools":
@@ -76,6 +78,126 @@ func (c *computeCLI) run(ctx context.Context, args []string) error {
 	default:
 		return fmt.Errorf("unknown wfctl compute command %q", args[1])
 	}
+}
+
+func (c *computeCLI) runAgent(ctx context.Context, args []string) error {
+	if len(args) == 0 {
+		return errors.New("usage: wfctl compute agent <setup>")
+	}
+	switch args[0] {
+	case "setup":
+		return c.runAgentSetup(ctx, args[1:])
+	default:
+		return fmt.Errorf("unknown wfctl compute agent command %q", args[0])
+	}
+}
+
+type agentSetupPlan struct {
+	InviteID         string `json:"invite_id,omitempty"`
+	InstallSessionID string `json:"install_session_id"`
+	WorkerID         string `json:"worker_id"`
+	CredentialID     string `json:"credential_id,omitempty"`
+	CredentialRef    string `json:"credential_ref,omitempty"`
+	TokenEnv         string `json:"token_env,omitempty"`
+	TokenPresent     bool   `json:"token_present"`
+	InstallRequested bool   `json:"install_requested,omitempty"`
+	StartRequested   bool   `json:"start_requested,omitempty"`
+	Verified         bool   `json:"verified,omitempty"`
+}
+
+func (c *computeCLI) runAgentSetup(ctx context.Context, args []string) error {
+	fs := c.newFlagSet("compute agent setup")
+	serverURL := fs.String("server", defaultServerURL(), "workflow-compute server URL")
+	requestTimeout := fs.Duration("request-timeout", 30*time.Second, "request timeout")
+	inviteID := fs.String("invite", "", "setup invite id")
+	inviteURL := fs.String("invite-url", "", "setup invite URL")
+	installSessionID := fs.String("install-session-id", "", "stable install session id")
+	credentialStore := fs.String("credential-store", "", "credential store name")
+	tokenEnv := fs.String("token-env", "", "environment variable name reserved for downstream token handoff")
+	tokenCredentialRef := fs.String("token-credential-ref", "", "credential reference for durable token storage")
+	install := fs.Bool("install", false, "render install intent")
+	start := fs.Bool("start", false, "render start intent")
+	verify := fs.Bool("verify", false, "finalize after external verification")
+	jsonOutput := fs.Bool("json", false, "write sanitized JSON output")
+	nonInteractive := fs.Bool("non-interactive", false, "fail instead of prompting")
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return err
+	}
+	if *inviteID == "" && *inviteURL == "" {
+		return errors.New("--invite or --invite-url is required")
+	}
+	if !*nonInteractive {
+		return errors.New("--non-interactive is required; interactive setup belongs to the compute agent binary")
+	}
+	if *installSessionID == "" {
+		*installSessionID = "session-" + shortHash(time.Now().UTC().Format(time.RFC3339Nano))
+	}
+	client, err := newComputeClient(*serverURL, "", *requestTimeout)
+	if err != nil {
+		return err
+	}
+	preview, err := client.agentSetupPreview(ctx, protocol.AgentSetupInvitePreviewRequest{
+		InviteID:  *inviteID,
+		InviteURL: *inviteURL,
+		OS:        runtime.GOOS,
+		Arch:      runtime.GOARCH,
+		Format:    protocol.PackageArtifactBinary,
+	})
+	if err != nil {
+		return err
+	}
+	claim, err := client.agentSetupClaim(ctx, protocol.AgentSetupInviteClaimRequest{
+		InviteID:         *inviteID,
+		InviteURL:        *inviteURL,
+		InstallSessionID: *installSessionID,
+		ServerURL:        *serverURL,
+		OS:               runtime.GOOS,
+		Arch:             runtime.GOARCH,
+		Format:           protocol.PackageArtifactBinary,
+	})
+	if err != nil {
+		return err
+	}
+	if claim.Session.WorkerID == "" {
+		return errors.New("setup claim response missing worker_id")
+	}
+	if claim.Session.CredentialID == "" && claim.CredentialRef == "" {
+		return errors.New("setup claim response missing credential id/ref")
+	}
+	if *verify {
+		finalized, err := client.agentSetupFinalize(ctx, protocol.AgentSetupInviteFinalizeRequest{
+			InviteID:         firstNonEmpty(*inviteID, preview.Invite.ID, claim.Invite.ID),
+			InstallSessionID: *installSessionID,
+			WorkerID:         claim.Session.WorkerID,
+			Verified:         true,
+		})
+		if err != nil {
+			return err
+		}
+		claim = finalized
+	}
+	plan := agentSetupPlan{
+		InviteID:         firstNonEmpty(preview.Invite.ID, claim.Invite.ID, *inviteID),
+		InstallSessionID: *installSessionID,
+		WorkerID:         claim.Session.WorkerID,
+		CredentialID:     claim.Session.CredentialID,
+		CredentialRef:    firstNonEmpty(*tokenCredentialRef, claim.CredentialRef),
+		TokenEnv:         firstNonEmpty(*tokenEnv, claim.TokenEnv, "COMPUTE_AGENT_TOKEN"),
+		TokenPresent:     claim.OneTimeToken != "" || claim.TokenPresent,
+		InstallRequested: *install,
+		StartRequested:   *start,
+		Verified:         claim.Session.FinalizedAt.IsZero() == false,
+	}
+	if *credentialStore != "" && plan.CredentialRef == "" {
+		plan.CredentialRef = *credentialStore + ":" + plan.WorkerID
+	}
+	if *jsonOutput {
+		return writeJSON(c.stdout, plan)
+	}
+	return writeJSON(c.stdout, map[string]any{"agent_setup": plan})
 }
 
 func (c *computeCLI) runEnroll(ctx context.Context, args []string) error {
@@ -483,6 +605,15 @@ func defaultServerURL() string {
 		return value
 	}
 	return "http://localhost:8080"
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 type cliTaskFlags struct {
