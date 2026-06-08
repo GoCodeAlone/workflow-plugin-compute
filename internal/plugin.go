@@ -19,7 +19,7 @@ func (p *computePlugin) Manifest() sdk.PluginManifest {
 		Name:        "workflow-plugin-compute",
 		Version:     Version,
 		Author:      "GoCodeAlone",
-		Description: "Workflow adapter for workflow-compute dispatch, wait, map, provider, and pool integration",
+		Description: "Workflow adapter for workflow-compute dispatch, wait, map, provider, pool, and setup integration",
 	}
 }
 

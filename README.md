@@ -122,6 +122,30 @@ For fanout work, use `step.compute_map` with a deterministic `tasks` list. The
 step submits every task, polls the core task/proof APIs, and stops the Workflow
 pipeline if any task fails, stalls, times out, or produces a non-accepted proof.
 
+## Projectless Agent Setup
+
+Agent setup can run through the plugin CLI without a Workflow project,
+`workflow.yaml`, or pre-known worker/org/pool/token values. The wfcompute
+control plane issues a setup invite, and the plugin claims it through the public
+invite APIs:
+
+```sh
+wfctl compute agent setup \
+  --server https://compute.example.com \
+  --invite-url 'https://compute.example.com/install?invite_id=...&redeem_code=...' \
+  --install-session-id "$(hostname)-setup" \
+  --token-env COMPUTE_AGENT_TOKEN \
+  --non-interactive \
+  --json
+```
+
+The command returns sanitized setup metadata, including the claimed worker id,
+credential id/ref, install session id, and whether a one-time token was present.
+It intentionally does not print the raw token, redeem code, org id, or pool id.
+Installation, service start, and credential persistence remain agent-runtime
+responsibilities; this plugin owns the projectless wfctl entrypoint and
+invite-scoped control-plane calls.
+
 ## Development
 
 ```sh
