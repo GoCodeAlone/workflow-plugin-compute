@@ -18,6 +18,15 @@ import (
 	sdk "github.com/GoCodeAlone/workflow/plugin/external/sdk"
 )
 
+const (
+	agentSetupRuntimeAuto              = "auto"
+	agentSetupRuntimeNone              = "none"
+	agentSetupRuntimePodman            = "podman"
+	agentSetupRuntimeDocker            = "docker"
+	agentSetupRuntimeNerdctl           = "nerdctl"
+	agentSetupRuntimeManagedContainerd = "managed-containerd"
+)
+
 type computeCLI struct {
 	stdout io.Writer
 	stderr io.Writer
@@ -102,13 +111,20 @@ type agentSetupPlan struct {
 	TokenEnv          string                               `json:"token_env,omitempty"`
 	TokenPresent      bool                                 `json:"token_present,omitempty"`
 	PackageCandidate  *protocol.AgentSetupPackageCandidate `json:"package_candidate,omitempty"`
+	RequestedRuntime  string                               `json:"requested_runtime,omitempty"`
 	RuntimeSelection  string                               `json:"runtime_selection,omitempty"`
 	DryRun            bool                                 `json:"dry_run,omitempty"`
 	InstallRequested  bool                                 `json:"install_requested,omitempty"`
 	StartRequested    bool                                 `json:"start_requested,omitempty"`
 	VerifyRequested   bool                                 `json:"verify_requested,omitempty"`
 	Verified          bool                                 `json:"verified,omitempty"`
+	ManagedRuntime    *agentSetupManagedRuntimePlan        `json:"managed_runtime,omitempty"`
 	AgentSetupCommand string                               `json:"agent_setup_command,omitempty"`
+}
+
+type agentSetupManagedRuntimePlan struct {
+	Plugin         string `json:"plugin"`
+	MinimumVersion string `json:"minimum_version"`
 }
 
 func (c *computeCLI) runAgentSetup(ctx context.Context, args []string) error {
@@ -121,7 +137,7 @@ func (c *computeCLI) runAgentSetup(ctx context.Context, args []string) error {
 	credentialStore := fs.String("credential-store", "", "credential store name")
 	tokenEnv := fs.String("token-env", "", "environment variable name reserved for downstream token handoff")
 	tokenCredentialRef := fs.String("token-credential-ref", "", "credential reference for durable token storage")
-	runtimeSelection := fs.String("runtime", "auto", "dry-run only: runtime backend selection for the workflow-compute setup command: auto, none, podman, docker, or nerdctl")
+	runtimeSelection := fs.String("runtime", agentSetupRuntimeAuto, "dry-run only: runtime backend selection for the workflow-compute setup command: auto, none, podman, docker, nerdctl, or managed-containerd")
 	install := fs.Bool("install", false, "dry-run only: render install intent for the workflow-compute setup command")
 	start := fs.Bool("start", false, "dry-run only: render start intent for the workflow-compute setup command")
 	verify := fs.Bool("verify", false, "dry-run only: render verification intent for the workflow-compute setup command")
@@ -150,14 +166,17 @@ func (c *computeCLI) runAgentSetup(ctx context.Context, args []string) error {
 		*installSessionID = "session-" + shortHash(time.Now().UTC().Format(time.RFC3339Nano))
 	}
 	if *dryRun {
+		commandRuntime := downstreamAgentSetupRuntimeSelection(normalizedRuntime)
 		plan := agentSetupPlan{
 			InstallSessionID:  *installSessionID,
-			RuntimeSelection:  normalizedRuntime,
+			RequestedRuntime:  requestedAgentSetupRuntimeSelection(normalizedRuntime, commandRuntime),
+			RuntimeSelection:  commandRuntime,
 			DryRun:            true,
 			InstallRequested:  *install,
 			StartRequested:    *start,
 			VerifyRequested:   *verify,
-			AgentSetupCommand: renderAgentSetupCommand(*serverURL, sanitizeInviteArgForDryRun(*inviteID, *showSecrets), sanitizeInviteURLForDryRun(*inviteURL, *showSecrets), *installSessionID, normalizedRuntime, *credentialStore, *tokenEnv, *tokenCredentialRef, *install, *start, *verify, *jsonOutput),
+			ManagedRuntime:    managedRuntimeSetupPlan(normalizedRuntime),
+			AgentSetupCommand: renderAgentSetupCommand(*serverURL, sanitizeInviteArgForDryRun(*inviteID, *showSecrets), sanitizeInviteURLForDryRun(*inviteURL, *showSecrets), *installSessionID, commandRuntime, *credentialStore, *tokenEnv, *tokenCredentialRef, *install, *start, *verify, *jsonOutput),
 		}
 		if *jsonOutput {
 			return writeJSON(c.stdout, plan)
@@ -236,13 +255,42 @@ func flagSpecified(args []string, name string) bool {
 func normalizeAgentSetupRuntimeSelection(selection string) (string, error) {
 	selection = strings.ToLower(strings.TrimSpace(selection))
 	if selection == "" {
-		selection = "auto"
+		selection = agentSetupRuntimeAuto
 	}
 	switch selection {
-	case "auto", "none", "podman", "docker", "nerdctl":
+	case agentSetupRuntimeAuto,
+		agentSetupRuntimeNone,
+		agentSetupRuntimePodman,
+		agentSetupRuntimeDocker,
+		agentSetupRuntimeNerdctl,
+		agentSetupRuntimeManagedContainerd:
 		return selection, nil
 	default:
-		return "", errors.New("--runtime must be auto, none, podman, docker, or nerdctl")
+		return "", errors.New("--runtime must be auto, none, podman, docker, nerdctl, or managed-containerd")
+	}
+}
+
+func downstreamAgentSetupRuntimeSelection(runtimeSelection string) string {
+	if runtimeSelection == agentSetupRuntimeManagedContainerd {
+		return agentSetupRuntimeAuto
+	}
+	return runtimeSelection
+}
+
+func requestedAgentSetupRuntimeSelection(runtimeSelection, commandRuntime string) string {
+	if runtimeSelection == commandRuntime {
+		return ""
+	}
+	return runtimeSelection
+}
+
+func managedRuntimeSetupPlan(runtimeSelection string) *agentSetupManagedRuntimePlan {
+	if runtimeSelection != agentSetupRuntimeManagedContainerd {
+		return nil
+	}
+	return &agentSetupManagedRuntimePlan{
+		Plugin:         "workflow-plugin-compute-container",
+		MinimumVersion: "v0.4.0",
 	}
 }
 

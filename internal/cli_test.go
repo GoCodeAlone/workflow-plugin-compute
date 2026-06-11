@@ -85,6 +85,58 @@ func TestT544_CLIAgentSetupDryRunRendersRuntimeInstallCommandProjectlessly(t *te
 	}
 }
 
+func TestT545_CLIAgentSetupDryRunRendersManagedContainerdRuntimePlan(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := newCLI(&stdout, &stderr).RunCLI([]string{
+		"compute", "agent", "setup",
+		"--server", "https://compute.example.invalid",
+		"--invite-url", "https://compute.example.invalid/install?invite_id=invite-1&redeem_code=secret-code",
+		"--install-session-id", "session-managed",
+		"--runtime", "managed-containerd",
+		"--credential-store", "keychain",
+		"--install",
+		"--verify",
+		"--dry-run",
+		"--non-interactive",
+		"--json",
+	})
+
+	if code != 0 {
+		t.Fatalf("RunCLI code=%d stderr=%s", code, stderr.String())
+	}
+	out := stdout.String()
+	var plan agentSetupPlan
+	if err := json.Unmarshal(stdout.Bytes(), &plan); err != nil {
+		t.Fatalf("decode dry-run output: %v\n%s", err, out)
+	}
+	if plan.RequestedRuntime != "managed-containerd" {
+		t.Fatalf("requested_runtime = %q, want managed-containerd", plan.RequestedRuntime)
+	}
+	if plan.RuntimeSelection != "auto" {
+		t.Fatalf("runtime_selection = %q, want downstream-safe auto", plan.RuntimeSelection)
+	}
+	if plan.ManagedRuntime == nil {
+		t.Fatalf("managed runtime plan missing in %s", out)
+	}
+	if plan.ManagedRuntime.Plugin != "workflow-plugin-compute-container" {
+		t.Fatalf("managed runtime plugin = %q", plan.ManagedRuntime.Plugin)
+	}
+	if plan.ManagedRuntime.MinimumVersion != "v0.4.0" {
+		t.Fatalf("managed runtime minimum version = %q", plan.ManagedRuntime.MinimumVersion)
+	}
+	if !strings.Contains(plan.AgentSetupCommand, "--runtime auto") {
+		t.Fatalf("agent setup command should remain compatible with current workflow-compute runtime selection: %s", plan.AgentSetupCommand)
+	}
+	if strings.Contains(plan.AgentSetupCommand, "--runtime managed-containerd") {
+		t.Fatalf("agent setup command must not render unsupported workflow-compute runtime value: %s", plan.AgentSetupCommand)
+	}
+	for _, forbidden := range []string{"secret-code", "redeem_code=secret-code"} {
+		if strings.Contains(out, forbidden) || strings.Contains(stderr.String(), forbidden) {
+			t.Fatalf("managed dry-run leaked %q: stdout=%s stderr=%s", forbidden, out, stderr.String())
+		}
+	}
+}
+
 func TestT544_CLIAgentSetupDryRunRedactsInviteSecretsByDefault(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := newCLI(&stdout, &stderr).RunCLI([]string{
@@ -215,7 +267,7 @@ func TestT544_CLIAgentSetupRejectsInvalidRuntimeBeforeServerMutation(t *testing.
 	if calls != 0 {
 		t.Fatalf("server was contacted %d times", calls)
 	}
-	if !strings.Contains(stderr.String(), "--runtime must be auto, none, podman, docker, or nerdctl") {
+	if !strings.Contains(stderr.String(), "--runtime must be auto, none, podman, docker, nerdctl, or managed-containerd") {
 		t.Fatalf("stderr: %s", stderr.String())
 	}
 	if stdout.Len() != 0 {

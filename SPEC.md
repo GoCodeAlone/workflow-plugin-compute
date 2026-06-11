@@ -61,6 +61,7 @@ V20: manifest `stepTypes` exactly match runtime `StepTypes`
 V21: plugin step/CLI surfaces must not mention product-capture, BMW, edge lambda, edge CDN, or another provider-specific business domain
 V22: `compute.provider_catalog` accepts typed `workflow-plugin-compute-core/protocol.ProviderContract` records from provider plugins without defining a parallel plugin-local provider schema
 V23: `step.compute_dispatch` and `step.compute_map` accept valid short-lived task `residue_policy`, reject malformed residue policy locally, and do not compute policy hashes or override provider/product authority
+V24: `wfctl compute agent setup --dry-run --runtime managed-containerd` renders setup intent plus `workflow-plugin-compute-container` dependency metadata only; it must not duplicate backend IDs, bundle IDs, supported targets, downloads, verification, probes, or runtime support decisions from the runtime catalog.
 
 §T
 
@@ -79,6 +80,7 @@ T11|x|align provider catalog details with public compute-core `ProviderContract`
 T12|x|remove provider-specific product-capture step/CLI/domain preview flattening from generic compute adapter|C12,I.step,V20,V21
 T13|x|keep provider catalog validation generic so external provider plugins can supply edge/product contracts without plugin-local provider schema|C13,I.module,V19,V22
 T14|x|submit optional short-lived task residue policy through dispatch/map steps without taking over core authority resolution|C14,I.step,V23
+T15|x|render projectless managed-containerd setup intent with compute-container dependency metadata and no runtime catalog/install/probe ownership|I.cmd,I.wfctl,C8,V10,V24
 
 §B
 

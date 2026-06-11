@@ -35,9 +35,15 @@ jobs:
         env:
           GIT_TERMINAL_PROMPT: "0"
         run: GOWORK=off go test -timeout 2m ./...
+      - name: Checkout workflow-compute for provider alignment
+        uses: actions/checkout@v4
+        with:
+          repository: GoCodeAlone/workflow-compute
+          token: ${{ secrets.RELEASES_TOKEN }}
+          path: workflow-compute
       - name: Verify workflow-compute setup runtime surface
         run: |
-          GOWORK=off go run github.com/GoCodeAlone/workflow-compute/cmd/compute agent setup --help 2>&1 | tee /tmp/compute-agent-setup-help.txt
+          (cd workflow-compute && GOWORK=off go run ./cmd/compute agent setup --help) 2>&1 | tee /tmp/compute-agent-setup-help.txt
           grep -q -- '-runtime' /tmp/compute-agent-setup-help.txt
       - name: Verify projectless agent setup CLI
         run: |
@@ -53,22 +59,57 @@ jobs:
             --server https://compute.example.invalid \
             --invite-url 'https://compute.example.invalid/install?invite_id=ci&redeem_code=ci-redemption-value&access_token=ci-access-value#auth_token=ci-fragment-value' \
             --install-session-id ci-session \
-            --runtime auto \
+            --runtime managed-containerd \
             --install \
             --verify \
             --dry-run \
             --non-interactive \
             --json 2>&1)"
           printf '%s\n' "$dry_run_output"
-          ! printf '%s\n' "$dry_run_output" | grep -E 'ci-redemption-value|ci-access-value|ci-fragment-value|redeem_code=ci-redemption-value|access_token=ci-access-value|auth_token=ci-fragment-value'
+          if printf '%s\n' "$dry_run_output" | grep -E 'ci-redemption-value|ci-access-value|ci-fragment-value|redeem_code=ci-redemption-value|access_token=ci-access-value|auth_token=ci-fragment-value'; then
+            echo "::error::dry-run output leaked setup secret material"
+            exit 1
+          fi
           printf '%s\n' "$dry_run_output" | grep -q '"agent_setup_command": "compute agent setup '
-          ! printf '%s\n' "$dry_run_output" | grep -q '"agent_setup_command": "wfctl plugin run '
-      - name: Checkout workflow-compute for provider alignment
-        uses: actions/checkout@v4
-        with:
-          repository: GoCodeAlone/workflow-compute
-          token: ${{ secrets.RELEASES_TOKEN }}
-          path: workflow-compute
+          printf '%s\n' "$dry_run_output" | grep -q '"requested_runtime": "managed-containerd"'
+          printf '%s\n' "$dry_run_output" | grep -q '"runtime_selection": "auto"'
+          printf '%s\n' "$dry_run_output" | grep -q '"plugin": "workflow-plugin-compute-container"'
+          printf '%s\n' "$dry_run_output" | grep -q '"minimum_version": "v0.4.0"'
+          printf '%s\n' "$dry_run_output" | grep -q -- '--runtime auto'
+          if printf '%s\n' "$dry_run_output" | grep -q -- '--runtime managed-containerd'; then
+            echo "::error::dry-run command rendered a runtime value current workflow-compute rejects"
+            exit 1
+          fi
+          if printf '%s\n' "$dry_run_output" | grep -q '"agent_setup_command": "wfctl plugin run '; then
+            echo "::error::dry-run command recursively targets wfctl plugin run"
+            exit 1
+          fi
+          set +e
+          timeout_prefix=()
+          if command -v timeout >/dev/null 2>&1; then
+            timeout_prefix=(timeout 20s)
+          fi
+          compat_output="$(cd workflow-compute && "${timeout_prefix[@]}" env GOWORK=off go run ./cmd/compute \
+            agent setup \
+            --server http://127.0.0.1:9 \
+            --invite-url 'http://127.0.0.1:9/install?invite_id=ci&redeem_code=ci-redacted' \
+            --install-session-id ci-session \
+            --runtime auto \
+            --install \
+            --verify \
+            --non-interactive \
+            --json 2>&1)"
+          compat_status="$?"
+          set -e
+          printf '%s\n' "$compat_output"
+          if [ "$compat_status" -eq 124 ]; then
+            echo "::error::workflow-compute setup compatibility probe timed out"
+            exit 1
+          fi
+          if printf '%s\n' "$compat_output" | grep -q -- '--runtime must be'; then
+            echo "::error::workflow-compute rejected generated runtime selection"
+            exit 1
+          fi
       - name: Check workflow-compute provider alignment
         run: scripts/check-workflow-compute-alignment.sh "$GITHUB_WORKSPACE/workflow-compute"
       - name: Validate workflow config
