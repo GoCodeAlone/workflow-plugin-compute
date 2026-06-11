@@ -4,8 +4,8 @@ go 1.26.3
 
 require (
 	github.com/GoCodeAlone/workflow v0.64.0
-	github.com/GoCodeAlone/workflow-compute v0.0.0-20260608080954-e17262a4eb65
-	github.com/GoCodeAlone/workflow-plugin-compute-core v0.4.0
+	github.com/GoCodeAlone/workflow-compute v0.0.0-20260611013203-3a1a07f1da28
+	github.com/GoCodeAlone/workflow-plugin-compute-core v0.5.0
 )
 
 require (
@@ -16,6 +16,11 @@ require (
 	github.com/GoCodeAlone/modular v1.13.0 // indirect
 	github.com/GoCodeAlone/modular/modules/auth v1.15.0 // indirect
 	github.com/GoCodeAlone/modular/modules/eventbus/v2 v2.8.0 // indirect
+	github.com/GoCodeAlone/workflow-plugin-compute-container v0.3.2 // indirect
+	github.com/GoCodeAlone/workflow-plugin-compute-service v0.1.0 // indirect
+	github.com/GoCodeAlone/workflow-plugin-compute-wasm v0.1.1 // indirect
+	github.com/GoCodeAlone/workflow-plugin-crypto v0.1.0 // indirect
+	github.com/GoCodeAlone/workflow-plugin-volunteer-science v0.1.0 // indirect
 	github.com/GoCodeAlone/yaegi v0.17.2 // indirect
 	github.com/IBM/sarama v1.47.0 // indirect
 	github.com/Microsoft/go-winio v0.6.2 // indirect
@@ -116,6 +121,7 @@ require (
 	github.com/redis/go-redis/v9 v9.19.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/ryanuber/go-glob v1.0.0 // indirect
+	github.com/tetratelabs/wazero v1.12.0 // indirect
 	github.com/xdg-go/pbkdf2 v1.0.0 // indirect
 	github.com/xdg-go/scram v1.2.0 // indirect
 	github.com/xdg-go/stringprep v1.0.4 // indirect

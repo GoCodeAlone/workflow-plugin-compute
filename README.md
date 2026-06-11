@@ -129,22 +129,41 @@ Agent setup can run through the plugin CLI without a Workflow project,
 control plane issues a setup invite, and the plugin claims it through the public
 invite APIs:
 
+`wfctl v0.78.2` or newer is required for first-run projectless
+`wfctl plugin run --ensure-installed` usage. The projectless path can be used
+directly from wfctl:
+
 ```sh
-wfctl compute agent setup \
+wfctl plugin run --ensure-installed workflow-plugin-compute -- \
+  compute agent setup \
   --server https://compute.example.com \
   --invite-url 'https://compute.example.com/install?invite_id=...&redeem_code=...' \
   --install-session-id "$(hostname)-setup" \
+  --runtime auto \
+  --install \
+  --verify \
+  --dry-run \
   --token-env COMPUTE_AGENT_TOKEN \
   --non-interactive \
   --json
 ```
 
-The command returns sanitized setup metadata, including the claimed worker id,
-credential id/ref, install session id, and whether a one-time token was present.
-It intentionally does not print the raw token, redeem code, org id, or pool id.
-Installation, service start, and credential persistence remain agent-runtime
-responsibilities; this plugin owns the projectless wfctl entrypoint and
-invite-scoped control-plane calls.
+Use `--dry-run` to render the equivalent `compute agent setup` command without
+claiming the invite. Dry-run output redacts secret-bearing invite URL query
+values by default; pass `--show-secrets` only when you need a local
+copy-pasteable command containing the redeem code. The rendered command targets
+the `compute` binary from workflow-compute; wfctl provides the projectless
+plugin entrypoint that produces that command. `--runtime auto` lets wfcompute
+choose a supported local runtime; `--runtime none` registers without protected
+workload availability.
+
+Without `--dry-run`, the command claims the setup invite and returns sanitized
+setup metadata, including the claimed worker id, credential id/ref, install
+session id, and whether a one-time token was present. It intentionally does not
+print the raw token, redeem code, org id, or pool id. Installation, service
+start, runtime selection, verification, and credential persistence remain
+agent-runtime responsibilities; this plugin owns the projectless wfctl
+entrypoint and invite-scoped control-plane calls.
 
 ## Development
 
