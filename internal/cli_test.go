@@ -7,7 +7,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/GoCodeAlone/workflow-compute/pkg/protocol"
 )
@@ -25,6 +24,8 @@ func TestT542_CLIAgentSetupHelpWorksProjectlessly(t *testing.T) {
 		"-server",
 		"-invite-url",
 		"-install-session-id",
+		"-runtime",
+		"-dry-run",
 		"-non-interactive",
 		"-json",
 	} {
@@ -34,6 +35,221 @@ func TestT542_CLIAgentSetupHelpWorksProjectlessly(t *testing.T) {
 	}
 	if strings.Contains(help, "\n  -token string") {
 		t.Fatalf("setup invite help must not expose broad API token flags: %s", help)
+	}
+}
+
+func TestT544_CLIAgentSetupDryRunRendersRuntimeInstallCommandProjectlessly(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("dry-run setup must not contact server, got %s %s", r.Method, r.URL.Path)
+	}))
+	defer srv.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := newCLI(&stdout, &stderr).RunCLI([]string{
+		"compute", "agent", "setup",
+		"--server", srv.URL,
+		"--invite-url", srv.URL + "/install?invite_id=invite-1",
+		"--install-session-id", "session-1",
+		"--runtime", "podman",
+		"--credential-store", "keychain",
+		"--install",
+		"--start",
+		"--verify",
+		"--dry-run",
+		"--non-interactive",
+		"--json",
+	})
+
+	if code != 0 {
+		t.Fatalf("RunCLI code=%d stderr=%s", code, stderr.String())
+	}
+	out := stdout.String()
+	for _, required := range []string{
+		`"runtime_selection": "podman"`,
+		`"dry_run": true`,
+		`"install_requested": true`,
+		`"start_requested": true`,
+		`"verify_requested": true`,
+		`"agent_setup_command": "compute agent setup`,
+		`--server`, srv.URL,
+		`--invite-url`, srv.URL + `/install?invite_id=invite-1`,
+		`--install-session-id`, `session-1`,
+		`--runtime`, `podman`,
+		`--credential-store`, `keychain`,
+		`--install`, `--start`, `--verify`,
+		`--non-interactive`, `--json`,
+	} {
+		if !strings.Contains(out, required) {
+			t.Fatalf("dry-run output missing %q in %s", required, out)
+		}
+	}
+}
+
+func TestT544_CLIAgentSetupDryRunRedactsInviteSecretsByDefault(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := newCLI(&stdout, &stderr).RunCLI([]string{
+		"compute", "agent", "setup",
+		"--server", "https://compute.example.invalid",
+		"--invite-url", "https://compute.example.invalid/install?invite_id=invite-1&redeem_code=code-1",
+		"--install-session-id", "session-1",
+		"--runtime", "auto",
+		"--dry-run",
+		"--non-interactive",
+		"--json",
+	})
+
+	if code != 0 {
+		t.Fatalf("RunCLI code=%d stderr=%s", code, stderr.String())
+	}
+	out := stdout.String()
+	if strings.Contains(out, "code-1") || strings.Contains(out, "redeem_code=code-1") {
+		t.Fatalf("dry-run leaked invite secret: %s", out)
+	}
+	for _, want := range []string{
+		`redeem_code=%3Credacted%3E`,
+		`"dry_run": true`,
+		`compute agent setup`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("dry-run output missing %q in %s", want, out)
+		}
+	}
+}
+
+func TestT544_CLIAgentSetupDryRunRedactsTokenLikeInviteKeys(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := newCLI(&stdout, &stderr).RunCLI([]string{
+		"compute", "agent", "setup",
+		"--server", "https://compute.example.invalid",
+		"--invite-url", "https://compute.example.invalid/install?invite_id=invite-1&access_token=access-value#auth_token=fragment-value",
+		"--install-session-id", "session-1",
+		"--dry-run",
+		"--non-interactive",
+		"--json",
+	})
+
+	if code != 0 {
+		t.Fatalf("RunCLI code=%d stderr=%s", code, stderr.String())
+	}
+	out := stdout.String()
+	for _, forbidden := range []string{"access-value", "fragment-value", "access_token=access-value", "auth_token=fragment-value"} {
+		if strings.Contains(out, forbidden) {
+			t.Fatalf("dry-run leaked %q in %s", forbidden, out)
+		}
+	}
+	for _, want := range []string{"access_token=%3Credacted%3E", "auth_token=%3Credacted%3E"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("dry-run output missing %q in %s", want, out)
+		}
+	}
+}
+
+func TestT544_CLIAgentSetupDryRunRedactsInviteArgRedeemCode(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := newCLI(&stdout, &stderr).RunCLI([]string{
+		"compute", "agent", "setup",
+		"--server", "https://compute.example.invalid",
+		"--invite", "invite-1:redeem-value",
+		"--install-session-id", "session-1",
+		"--dry-run",
+		"--non-interactive",
+		"--json",
+	})
+
+	if code != 0 {
+		t.Fatalf("RunCLI code=%d stderr=%s", code, stderr.String())
+	}
+	out := stdout.String()
+	if strings.Contains(out, "redeem-value") || strings.Contains(out, "invite-1:redeem-value") {
+		t.Fatalf("dry-run leaked invite redeem code: %s", out)
+	}
+	if !strings.Contains(out, `invite-1:\u003credacted\u003e`) && !strings.Contains(out, "invite-1:<redacted>") {
+		t.Fatalf("dry-run output missing redacted invite arg: %s", out)
+	}
+}
+
+func TestT544_CLIAgentSetupDryRunCanRenderExplicitSecretCommand(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := newCLI(&stdout, &stderr).RunCLI([]string{
+		"compute", "agent", "setup",
+		"--server", "https://compute.example.invalid",
+		"--invite-url", "https://compute.example.invalid/install?invite_id=invite-1&redeem_code=code-1",
+		"--install-session-id", "session-1",
+		"--runtime", "auto",
+		"--dry-run",
+		"--show-secrets",
+		"--non-interactive",
+		"--json",
+	})
+
+	if code != 0 {
+		t.Fatalf("RunCLI code=%d stderr=%s", code, stderr.String())
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "redeem_code=code-1") {
+		t.Fatalf("explicit secret dry-run did not preserve invite command: %s", out)
+	}
+}
+
+func TestT544_CLIAgentSetupRejectsInvalidRuntimeBeforeServerMutation(t *testing.T) {
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		t.Fatalf("invalid runtime should fail before server mutation, got %s %s", r.Method, r.URL.Path)
+	}))
+	defer srv.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := newCLI(&stdout, &stderr).RunCLI([]string{
+		"compute", "agent", "setup",
+		"--server", srv.URL,
+		"--invite", "invite-1",
+		"--runtime", "hyper-v",
+		"--non-interactive",
+		"--json",
+	})
+
+	if code == 0 {
+		t.Fatal("RunCLI succeeded with invalid runtime")
+	}
+	if calls != 0 {
+		t.Fatalf("server was contacted %d times", calls)
+	}
+	if !strings.Contains(stderr.String(), "--runtime must be auto, none, podman, docker, or nerdctl") {
+		t.Fatalf("stderr: %s", stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout should be empty on invalid runtime: %s", stdout.String())
+	}
+}
+
+func TestT544_AgentSetupCommandShellQuotesExpansionSyntax(t *testing.T) {
+	command := renderAgentSetupCommand(
+		"https://compute.example.invalid",
+		"",
+		"https://compute.example.invalid/install?invite_id=invite-1&redeem_code=$(cat /tmp/token)&owner=Bob's",
+		"session-1",
+		"auto",
+		"",
+		"",
+		"",
+		true,
+		false,
+		true,
+		true,
+	)
+	if strings.Contains(command, "\"https://compute.example.invalid/install?") {
+		t.Fatalf("invite URL used double quotes, allowing shell expansion: %s", command)
+	}
+	for _, want := range []string{
+		`--invite-url 'https://compute.example.invalid/install?invite_id=invite-1&redeem_code=$(cat /tmp/token)&owner=Bob'"'"'s'`,
+		`--runtime auto`,
+		`--install`,
+		`--verify`,
+	} {
+		if !strings.Contains(command, want) {
+			t.Fatalf("rendered command missing %q in %s", want, command)
+		}
 	}
 }
 
@@ -122,69 +338,56 @@ func TestT542_CLIAgentSetupClaimsInviteWithoutProjectManifestOrSecretOutput(t *t
 			t.Fatalf("stdout missing %q in %s", required, out)
 		}
 	}
-	for _, forbidden := range []string{"raw-secret-token", "code-1", "redeem_code", "org-1", "pool-1"} {
+	for _, forbidden := range []string{"raw-secret-token", "code-1", "redeem_code", "org-1", "pool-1", "runtime_selection"} {
 		if strings.Contains(out, forbidden) || strings.Contains(stderr.String(), forbidden) {
 			t.Fatalf("output leaked %q: stdout=%s stderr=%s", forbidden, out, stderr.String())
 		}
 	}
 }
 
-func TestT542_CLIAgentSetupVerifyFinalizesInviteWithoutSecretOutput(t *testing.T) {
-	var paths []string
-	var finalizeReq protocol.AgentSetupInviteFinalizeRequest
+func TestT544_CLIAgentSetupRejectsRuntimeInstallStartVerifyWithoutDryRun(t *testing.T) {
+	calls := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		paths = append(paths, r.URL.Path)
-		switch r.URL.Path {
-		case "/v1/onboarding/setup-invites/preview":
-			_ = json.NewEncoder(w).Encode(protocol.AgentSetupInvitePreviewResponse{
-				Invite: protocol.AgentSetupInvite{ID: "invite-verify", Policy: protocol.AgentOnboardingRequest{AgentID: "worker-verify"}},
-			})
-		case "/v1/onboarding/setup-invites/claim":
-			_ = json.NewEncoder(w).Encode(protocol.AgentSetupInviteClaimResponse{
-				Invite:  protocol.AgentSetupInvite{ID: "invite-verify", Policy: protocol.AgentOnboardingRequest{AgentID: "worker-verify"}},
-				Session: protocol.AgentSetupInstallSession{ID: "session-verify", InviteID: "invite-verify", WorkerID: "worker-verify", CredentialID: "cred-verify"},
-			})
-		case "/v1/onboarding/setup-invites/finalize":
-			if err := json.NewDecoder(r.Body).Decode(&finalizeReq); err != nil {
-				t.Fatalf("decode finalize: %v", err)
-			}
-			_ = json.NewEncoder(w).Encode(protocol.AgentSetupInviteClaimResponse{
-				Invite:       protocol.AgentSetupInvite{ID: "invite-verify", Policy: protocol.AgentOnboardingRequest{AgentID: "worker-verify"}},
-				Session:      protocol.AgentSetupInstallSession{ID: "session-verify", InviteID: "invite-verify", WorkerID: "worker-verify", CredentialID: "cred-verify", FinalizedAt: time.Now().UTC()},
-				OneTimeToken: "finalize-secret",
-			})
-		default:
-			t.Fatalf("path: %s", r.URL.Path)
-		}
+		calls++
+		t.Fatalf("non-dry-run setup intent should fail before server mutation, got %s %s", r.Method, r.URL.Path)
 	}))
 	defer srv.Close()
 
-	var stdout, stderr bytes.Buffer
-	code := newCLI(&stdout, &stderr).RunCLI([]string{
-		"compute", "agent", "setup",
-		"--server", srv.URL,
-		"--invite", "invite-verify",
-		"--install-session-id", "session-verify",
-		"--non-interactive",
-		"--verify",
-		"--json",
-	})
-
-	if code != 0 {
-		t.Fatalf("RunCLI code=%d stderr=%s", code, stderr.String())
+	for _, tc := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "runtime", args: []string{"--runtime", "podman"}, want: "--runtime is only supported with --dry-run"},
+		{name: "install", args: []string{"--install"}, want: "--install, --start, and --verify are only supported with --dry-run"},
+		{name: "start", args: []string{"--start"}, want: "--install, --start, and --verify are only supported with --dry-run"},
+		{name: "verify", args: []string{"--verify"}, want: "--install, --start, and --verify are only supported with --dry-run"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			args := []string{
+				"compute", "agent", "setup",
+				"--server", srv.URL,
+				"--invite", "invite-verify",
+				"--install-session-id", "session-verify",
+				"--non-interactive",
+				"--json",
+			}
+			args = append(args, tc.args...)
+			code := newCLI(&stdout, &stderr).RunCLI(args)
+			if code == 0 {
+				t.Fatalf("RunCLI succeeded for %s", tc.name)
+			}
+			if !strings.Contains(stderr.String(), tc.want) {
+				t.Fatalf("stderr missing %q: %s", tc.want, stderr.String())
+			}
+			if stdout.Len() != 0 {
+				t.Fatalf("stdout should be empty: %s", stdout.String())
+			}
+		})
 	}
-	if strings.Join(paths, ",") != "/v1/onboarding/setup-invites/preview,/v1/onboarding/setup-invites/claim,/v1/onboarding/setup-invites/finalize" {
-		t.Fatalf("paths: %v", paths)
-	}
-	if finalizeReq.InviteID != "invite-verify" || finalizeReq.InstallSessionID != "session-verify" || finalizeReq.WorkerID != "worker-verify" || !finalizeReq.Verified {
-		t.Fatalf("finalize request: %+v", finalizeReq)
-	}
-	out := stdout.String()
-	if !strings.Contains(out, `"verified": true`) {
-		t.Fatalf("stdout missing verified=true: %s", out)
-	}
-	if strings.Contains(out, "finalize-secret") || strings.Contains(stderr.String(), "finalize-secret") {
-		t.Fatalf("output leaked finalize token: stdout=%s stderr=%s", out, stderr.String())
+	if calls != 0 {
+		t.Fatalf("server was contacted %d times", calls)
 	}
 }
 

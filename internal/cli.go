@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"runtime"
 	"slices"
@@ -93,17 +94,21 @@ func (c *computeCLI) runAgent(ctx context.Context, args []string) error {
 }
 
 type agentSetupPlan struct {
-	InviteID         string                               `json:"invite_id,omitempty"`
-	InstallSessionID string                               `json:"install_session_id"`
-	WorkerID         string                               `json:"worker_id"`
-	CredentialID     string                               `json:"credential_id,omitempty"`
-	CredentialRef    string                               `json:"credential_ref,omitempty"`
-	TokenEnv         string                               `json:"token_env,omitempty"`
-	TokenPresent     bool                                 `json:"token_present"`
-	PackageCandidate *protocol.AgentSetupPackageCandidate `json:"package_candidate,omitempty"`
-	InstallRequested bool                                 `json:"install_requested,omitempty"`
-	StartRequested   bool                                 `json:"start_requested,omitempty"`
-	Verified         bool                                 `json:"verified,omitempty"`
+	InviteID          string                               `json:"invite_id,omitempty"`
+	InstallSessionID  string                               `json:"install_session_id,omitempty"`
+	WorkerID          string                               `json:"worker_id,omitempty"`
+	CredentialID      string                               `json:"credential_id,omitempty"`
+	CredentialRef     string                               `json:"credential_ref,omitempty"`
+	TokenEnv          string                               `json:"token_env,omitempty"`
+	TokenPresent      bool                                 `json:"token_present,omitempty"`
+	PackageCandidate  *protocol.AgentSetupPackageCandidate `json:"package_candidate,omitempty"`
+	RuntimeSelection  string                               `json:"runtime_selection,omitempty"`
+	DryRun            bool                                 `json:"dry_run,omitempty"`
+	InstallRequested  bool                                 `json:"install_requested,omitempty"`
+	StartRequested    bool                                 `json:"start_requested,omitempty"`
+	VerifyRequested   bool                                 `json:"verify_requested,omitempty"`
+	Verified          bool                                 `json:"verified,omitempty"`
+	AgentSetupCommand string                               `json:"agent_setup_command,omitempty"`
 }
 
 func (c *computeCLI) runAgentSetup(ctx context.Context, args []string) error {
@@ -116,11 +121,15 @@ func (c *computeCLI) runAgentSetup(ctx context.Context, args []string) error {
 	credentialStore := fs.String("credential-store", "", "credential store name")
 	tokenEnv := fs.String("token-env", "", "environment variable name reserved for downstream token handoff")
 	tokenCredentialRef := fs.String("token-credential-ref", "", "credential reference for durable token storage")
-	install := fs.Bool("install", false, "render install intent")
-	start := fs.Bool("start", false, "render start intent")
-	verify := fs.Bool("verify", false, "finalize after external verification")
+	runtimeSelection := fs.String("runtime", "auto", "dry-run only: runtime backend selection for the workflow-compute setup command: auto, none, podman, docker, or nerdctl")
+	install := fs.Bool("install", false, "dry-run only: render install intent for the workflow-compute setup command")
+	start := fs.Bool("start", false, "dry-run only: render start intent for the workflow-compute setup command")
+	verify := fs.Bool("verify", false, "dry-run only: render verification intent for the workflow-compute setup command")
+	dryRun := fs.Bool("dry-run", false, "render the compute agent setup command without claiming the invite")
+	showSecrets := fs.Bool("show-secrets", false, "include secret-bearing invite values in dry-run command output")
 	jsonOutput := fs.Bool("json", false, "write sanitized JSON output")
 	nonInteractive := fs.Bool("non-interactive", false, "fail instead of prompting")
+	runtimeSpecified := flagSpecified(args, "runtime")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
@@ -133,8 +142,33 @@ func (c *computeCLI) runAgentSetup(ctx context.Context, args []string) error {
 	if !*nonInteractive {
 		return errors.New("--non-interactive is required; interactive setup belongs to the compute agent binary")
 	}
+	normalizedRuntime, err := normalizeAgentSetupRuntimeSelection(*runtimeSelection)
+	if err != nil {
+		return err
+	}
 	if *installSessionID == "" {
 		*installSessionID = "session-" + shortHash(time.Now().UTC().Format(time.RFC3339Nano))
+	}
+	if *dryRun {
+		plan := agentSetupPlan{
+			InstallSessionID:  *installSessionID,
+			RuntimeSelection:  normalizedRuntime,
+			DryRun:            true,
+			InstallRequested:  *install,
+			StartRequested:    *start,
+			VerifyRequested:   *verify,
+			AgentSetupCommand: renderAgentSetupCommand(*serverURL, sanitizeInviteArgForDryRun(*inviteID, *showSecrets), sanitizeInviteURLForDryRun(*inviteURL, *showSecrets), *installSessionID, normalizedRuntime, *credentialStore, *tokenEnv, *tokenCredentialRef, *install, *start, *verify, *jsonOutput),
+		}
+		if *jsonOutput {
+			return writeJSON(c.stdout, plan)
+		}
+		return writeJSON(c.stdout, map[string]any{"agent_setup": plan})
+	}
+	if *install || *start || *verify {
+		return errors.New("--install, --start, and --verify are only supported with --dry-run; run the rendered workflow-compute setup command to perform install/start/verify")
+	}
+	if runtimeSpecified {
+		return errors.New("--runtime is only supported with --dry-run; run the rendered workflow-compute setup command to apply runtime selection")
 	}
 	client, err := newComputeClient(*serverURL, "", *requestTimeout)
 	if err != nil {
@@ -168,18 +202,6 @@ func (c *computeCLI) runAgentSetup(ctx context.Context, args []string) error {
 	if claim.Session.CredentialID == "" && claim.CredentialRef == "" {
 		return errors.New("setup claim response missing credential id/ref")
 	}
-	if *verify {
-		finalized, err := client.agentSetupFinalize(ctx, protocol.AgentSetupInviteFinalizeRequest{
-			InviteID:         firstNonEmpty(*inviteID, preview.Invite.ID, claim.Invite.ID),
-			InstallSessionID: *installSessionID,
-			WorkerID:         claim.Session.WorkerID,
-			Verified:         true,
-		})
-		if err != nil {
-			return err
-		}
-		claim = finalized
-	}
 	plan := agentSetupPlan{
 		InviteID:         firstNonEmpty(preview.Invite.ID, claim.Invite.ID, *inviteID),
 		InstallSessionID: *installSessionID,
@@ -189,8 +211,6 @@ func (c *computeCLI) runAgentSetup(ctx context.Context, args []string) error {
 		TokenEnv:         firstNonEmpty(*tokenEnv, claim.TokenEnv, "COMPUTE_AGENT_TOKEN"),
 		TokenPresent:     claim.OneTimeToken != "" || claim.TokenPresent,
 		PackageCandidate: firstAgentSetupPackageCandidate(claim.PackageCandidates, preview.PackageCandidates),
-		InstallRequested: *install,
-		StartRequested:   *start,
 		Verified:         claim.Session.FinalizedAt.IsZero() == false,
 	}
 	if *credentialStore != "" && plan.CredentialRef == "" {
@@ -200,6 +220,178 @@ func (c *computeCLI) runAgentSetup(ctx context.Context, args []string) error {
 		return writeJSON(c.stdout, plan)
 	}
 	return writeJSON(c.stdout, map[string]any{"agent_setup": plan})
+}
+
+func flagSpecified(args []string, name string) bool {
+	long := "--" + name
+	short := "-" + name
+	for _, arg := range args {
+		if arg == long || arg == short || strings.HasPrefix(arg, long+"=") || strings.HasPrefix(arg, short+"=") {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeAgentSetupRuntimeSelection(selection string) (string, error) {
+	selection = strings.ToLower(strings.TrimSpace(selection))
+	if selection == "" {
+		selection = "auto"
+	}
+	switch selection {
+	case "auto", "none", "podman", "docker", "nerdctl":
+		return selection, nil
+	default:
+		return "", errors.New("--runtime must be auto, none, podman, docker, or nerdctl")
+	}
+}
+
+func renderAgentSetupCommand(serverURL, inviteID, inviteURL, installSessionID, runtimeSelection, credentialStore, tokenEnv, tokenCredentialRef string, install, start, verify, jsonOutput bool) string {
+	args := []string{"compute", "agent", "setup"}
+	appendFlag := func(name, value string) {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			args = append(args, name, value)
+		}
+	}
+	appendFlag("--server", serverURL)
+	appendFlag("--invite", inviteID)
+	appendFlag("--invite-url", inviteURL)
+	appendFlag("--install-session-id", installSessionID)
+	appendFlag("--runtime", runtimeSelection)
+	appendFlag("--credential-store", credentialStore)
+	appendFlag("--token-env", tokenEnv)
+	appendFlag("--token-credential-ref", tokenCredentialRef)
+	if install {
+		args = append(args, "--install")
+	}
+	if start {
+		args = append(args, "--start")
+	}
+	if verify {
+		args = append(args, "--verify")
+	}
+	args = append(args, "--non-interactive")
+	if jsonOutput {
+		args = append(args, "--json")
+	}
+	quoted := make([]string, 0, len(args))
+	for _, arg := range args {
+		quoted = append(quoted, shellQuote(arg))
+	}
+	return strings.Join(quoted, " ")
+}
+
+func sanitizeInviteArgForDryRun(invite string, showSecrets bool) string {
+	invite = strings.TrimSpace(invite)
+	if invite == "" || showSecrets {
+		return invite
+	}
+	if strings.Contains(invite, "://") {
+		return sanitizeInviteURLForDryRun(invite, false)
+	}
+	for _, sep := range []string{":", ".", "/"} {
+		left, right, ok := strings.Cut(invite, sep)
+		if ok && strings.TrimSpace(left) != "" && strings.TrimSpace(right) != "" {
+			return strings.TrimSpace(left) + sep + "<redacted>"
+		}
+	}
+	if inviteValueSensitive(invite) {
+		return "<redacted-invite>"
+	}
+	return invite
+}
+
+func sanitizeInviteURLForDryRun(inviteURL string, showSecrets bool) string {
+	inviteURL = strings.TrimSpace(inviteURL)
+	if inviteURL == "" || showSecrets {
+		return inviteURL
+	}
+	parsed, err := url.Parse(inviteURL)
+	if err != nil {
+		return redactInviteValue(inviteURL)
+	}
+	q := parsed.Query()
+	redacted := false
+	for key := range q {
+		if !agentSetupInviteURLKeySensitive(key) {
+			continue
+		}
+		q.Set(key, "<redacted>")
+		redacted = true
+	}
+	if parsed.Fragment != "" {
+		fragment, err := url.ParseQuery(parsed.Fragment)
+		if err != nil {
+			if inviteValueSensitive(parsed.Fragment) {
+				parsed.Fragment = "<redacted>"
+				redacted = true
+			}
+		} else {
+			fragmentRedacted := false
+			for key := range fragment {
+				if !agentSetupInviteURLKeySensitive(key) {
+					continue
+				}
+				fragment.Set(key, "<redacted>")
+				fragmentRedacted = true
+			}
+			if fragmentRedacted {
+				parsed.Fragment = strings.NewReplacer("%3C", "<", "%3E", ">").Replace(fragment.Encode())
+				redacted = true
+			}
+		}
+	}
+	if !redacted {
+		return inviteURL
+	}
+	parsed.RawQuery = q.Encode()
+	return parsed.String()
+}
+
+func agentSetupInviteURLKeySensitive(key string) bool {
+	key = strings.ToLower(strings.TrimSpace(key))
+	for _, marker := range []string{"redeem", "code", "token", "secret"} {
+		if strings.Contains(key, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func inviteValueSensitive(value string) bool {
+	value = strings.ToLower(value)
+	for _, marker := range []string{"redeem", "code=", "token", "secret"} {
+		if strings.Contains(value, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func redactInviteValue(value string) string {
+	lowered := strings.ToLower(value)
+	for _, marker := range []string{"redeem", "code=", "token", "secret"} {
+		if strings.Contains(lowered, marker) {
+			return "<redacted-invite-url>"
+		}
+	}
+	return value
+}
+
+func shellQuote(s string) string {
+	if s == "" {
+		return "''"
+	}
+	if strings.IndexFunc(s, func(r rune) bool {
+		return !(r >= 'A' && r <= 'Z') &&
+			!(r >= 'a' && r <= 'z') &&
+			!(r >= '0' && r <= '9') &&
+			!strings.ContainsRune("@%_+=:,./-", r)
+	}) == -1 {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'"
 }
 
 func firstAgentSetupPackageCandidate(candidateSets ...[]protocol.AgentSetupPackageCandidate) *protocol.AgentSetupPackageCandidate {

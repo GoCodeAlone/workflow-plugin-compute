@@ -26,15 +26,43 @@ jobs:
           git config --global url."https://x-access-token:${RELEASES_TOKEN}@github.com/GoCodeAlone/".insteadOf "https://github.com/GoCodeAlone/"
           go env -w GOPRIVATE=github.com/GoCodeAlone/*
           go env -w GONOSUMDB=github.com/GoCodeAlone/*
-      - name: Install wfctl
+      - name: Install wfctl v0.78.2
         run: |
-          curl -fsSL -o wfctl https://github.com/GoCodeAlone/workflow/releases/download/v0.63.1/wfctl-linux-amd64
+          curl -fsSL -o wfctl https://github.com/GoCodeAlone/workflow/releases/download/v0.78.2/wfctl-linux-amd64
           chmod +x wfctl
           sudo mv wfctl /usr/local/bin/wfctl
       - name: Test
         env:
           GIT_TERMINAL_PROMPT: "0"
         run: GOWORK=off go test -timeout 2m ./...
+      - name: Verify workflow-compute setup runtime surface
+        run: |
+          GOWORK=off go run github.com/GoCodeAlone/workflow-compute/cmd/compute agent setup --help 2>&1 | tee /tmp/compute-agent-setup-help.txt
+          grep -q -- '-runtime' /tmp/compute-agent-setup-help.txt
+      - name: Verify projectless agent setup CLI
+        run: |
+          GOWORK=off go build \
+            -ldflags "-s -w -X github.com/GoCodeAlone/workflow-plugin-compute/internal.Version=$(jq -r .version plugin.json)" \
+            -o workflow-plugin-compute ./cmd/workflow-plugin-compute
+          plugin_dir="$(mktemp -d)"
+          trap 'rm -rf "$plugin_dir"' EXIT
+          help_output="$(wfctl plugin run --plugin-dir "$plugin_dir/plugins" --ensure-installed --local . workflow-plugin-compute -- compute agent setup --help 2>&1)"
+          printf '%s\n' "$help_output"
+          dry_run_output="$(wfctl plugin run --plugin-dir "$plugin_dir/plugins" --ensure-installed --local . workflow-plugin-compute -- \
+            compute agent setup \
+            --server https://compute.example.invalid \
+            --invite-url 'https://compute.example.invalid/install?invite_id=ci&redeem_code=ci-redemption-value&access_token=ci-access-value#auth_token=ci-fragment-value' \
+            --install-session-id ci-session \
+            --runtime auto \
+            --install \
+            --verify \
+            --dry-run \
+            --non-interactive \
+            --json 2>&1)"
+          printf '%s\n' "$dry_run_output"
+          ! printf '%s\n' "$dry_run_output" | grep -E 'ci-redemption-value|ci-access-value|ci-fragment-value|redeem_code=ci-redemption-value|access_token=ci-access-value|auth_token=ci-fragment-value'
+          printf '%s\n' "$dry_run_output" | grep -q '"agent_setup_command": "compute agent setup '
+          ! printf '%s\n' "$dry_run_output" | grep -q '"agent_setup_command": "wfctl plugin run '
       - name: Checkout workflow-compute for provider alignment
         uses: actions/checkout@v4
         with:
