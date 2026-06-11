@@ -25,7 +25,11 @@
   "dependencies": [
     {
       "name": "workflow-plugin-compute-core",
-      "constraint": ">=0.0.0"
+      "constraint": ">=0.6.0"
+    },
+    {
+      "name": "workflow-plugin-compute-container",
+      "constraint": ">=0.4.0"
     }
   ]
 }

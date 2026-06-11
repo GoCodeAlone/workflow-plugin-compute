@@ -157,6 +157,17 @@ plugin entrypoint that produces that command. `--runtime auto` lets wfcompute
 choose a supported local runtime; `--runtime none` registers without protected
 workload availability.
 
+Use `--runtime managed-containerd` when the operator wants the compute agent to
+install and verify the managed containerd runtime path supplied by
+`workflow-plugin-compute-container` `v0.4.0` or newer. In dry-run JSON this
+plugin includes only the requested runtime plus the managed runtime plugin name
+and minimum version so installers and setup UIs can display the dependency
+without reimplementing the runtime catalog. Until workflow-compute accepts a
+first-class managed-containerd runtime selector, the rendered downstream command
+uses `--runtime auto`. Download, extraction, signature verification, runtime
+probing, support/degraded decisions, and catalog details remain inside the
+workflow-compute agent/runtime path.
+
 Without `--dry-run`, the command claims the setup invite and returns sanitized
 setup metadata, including the claimed worker id, credential id/ref, install
 session id, and whether a one-time token was present. It intentionally does not
