@@ -39,7 +39,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: GoCodeAlone/workflow-compute
-          token: ${{ secrets.RELEASES_TOKEN }}
+          token: ${{ secrets.RELEASES_TOKEN || github.token }}
           path: workflow-compute
       - name: Verify workflow-compute setup runtime surface
         run: |
