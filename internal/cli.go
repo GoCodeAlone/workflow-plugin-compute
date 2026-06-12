@@ -26,7 +26,7 @@ const (
 	agentSetupRuntimeNerdctl           = "nerdctl"
 	agentSetupRuntimeManagedContainerd = "managed-containerd"
 	managedRuntimeContainerPlugin      = "workflow-plugin-compute-container"
-	managedRuntimeContainerMinimum     = "v0.5.0"
+	managedRuntimeContainerMinimum     = "v0.5.1"
 	managedRuntimeInstallerContract    = "ManagedRuntimeBundleInstaller"
 	managedRuntimeCommandPrefix        = "wfctl plugin run --ensure-installed " + managedRuntimeContainerPlugin + "@" + managedRuntimeContainerMinimum + " -- managed-runtime"
 )

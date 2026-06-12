@@ -159,7 +159,7 @@ workload availability.
 
 Use `--runtime managed-containerd` when the operator wants the compute agent to
 install and verify the managed containerd runtime path supplied by
-`workflow-plugin-compute-container` `v0.5.0` or newer. In dry-run JSON this
+`workflow-plugin-compute-container` `v0.5.1` or newer. In dry-run JSON this
 plugin includes the requested runtime, managed runtime plugin dependency,
 installer contract name, lifecycle actions, and a `wfctl plugin run` command
 prefix for the container plugin. It does not copy backend IDs, bundle IDs,

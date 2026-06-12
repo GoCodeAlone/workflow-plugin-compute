@@ -121,13 +121,13 @@ func TestT545_CLIAgentSetupDryRunRendersManagedContainerdRuntimePlan(t *testing.
 	if plan.ManagedRuntime.Plugin != "workflow-plugin-compute-container" {
 		t.Fatalf("managed runtime plugin = %q", plan.ManagedRuntime.Plugin)
 	}
-	if plan.ManagedRuntime.MinimumVersion != "v0.5.0" {
+	if plan.ManagedRuntime.MinimumVersion != "v0.5.1" {
 		t.Fatalf("managed runtime minimum version = %q", plan.ManagedRuntime.MinimumVersion)
 	}
 	if plan.ManagedRuntime.Contract != "ManagedRuntimeBundleInstaller" {
 		t.Fatalf("managed runtime contract = %q", plan.ManagedRuntime.Contract)
 	}
-	if plan.ManagedRuntime.CommandPrefix != "wfctl plugin run --ensure-installed workflow-plugin-compute-container@v0.5.0 -- managed-runtime" {
+	if plan.ManagedRuntime.CommandPrefix != "wfctl plugin run --ensure-installed workflow-plugin-compute-container@v0.5.1 -- managed-runtime" {
 		t.Fatalf("managed runtime command prefix = %q", plan.ManagedRuntime.CommandPrefix)
 	}
 	wantActions := strings.Join([]string{"install", "doctor", "uninstall", "reinstall"}, ",")
