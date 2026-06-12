@@ -159,14 +159,16 @@ workload availability.
 
 Use `--runtime managed-containerd` when the operator wants the compute agent to
 install and verify the managed containerd runtime path supplied by
-`workflow-plugin-compute-container` `v0.4.0` or newer. In dry-run JSON this
-plugin includes only the requested runtime plus the managed runtime plugin name
-and minimum version so installers and setup UIs can display the dependency
-without reimplementing the runtime catalog. Until workflow-compute accepts a
-first-class managed-containerd runtime selector, the rendered downstream command
-uses `--runtime auto`. Download, extraction, signature verification, runtime
-probing, support/degraded decisions, and catalog details remain inside the
-workflow-compute agent/runtime path.
+`workflow-plugin-compute-container` `v0.5.0` or newer. In dry-run JSON this
+plugin includes the requested runtime, managed runtime plugin dependency,
+installer contract name, lifecycle actions, and a `wfctl plugin run` command
+prefix for the container plugin. It does not copy backend IDs, bundle IDs,
+download URLs, signature policy, probe logic, or support decisions from the
+runtime catalog. Until workflow-compute accepts a first-class managed-containerd
+runtime selector, the rendered downstream command uses `--runtime auto`.
+Download, extraction, signature verification, runtime probing,
+support/degraded decisions, and catalog details remain inside the
+workflow-compute agent/runtime path and the container plugin installer contract.
 
 Without `--dry-run`, the command claims the setup invite and returns sanitized
 setup metadata, including the claimed worker id, credential id/ref, install

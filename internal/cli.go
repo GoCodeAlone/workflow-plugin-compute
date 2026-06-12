@@ -25,6 +25,10 @@ const (
 	agentSetupRuntimeDocker            = "docker"
 	agentSetupRuntimeNerdctl           = "nerdctl"
 	agentSetupRuntimeManagedContainerd = "managed-containerd"
+	managedRuntimeContainerPlugin      = "workflow-plugin-compute-container"
+	managedRuntimeContainerMinimum     = "v0.5.0"
+	managedRuntimeInstallerContract    = "ManagedRuntimeBundleInstaller"
+	managedRuntimeCommandPrefix        = "wfctl plugin run --ensure-installed workflow-plugin-compute-container@v0.5.0 -- managed-runtime"
 )
 
 type computeCLI struct {
@@ -123,8 +127,11 @@ type agentSetupPlan struct {
 }
 
 type agentSetupManagedRuntimePlan struct {
-	Plugin         string `json:"plugin"`
-	MinimumVersion string `json:"minimum_version"`
+	Plugin           string   `json:"plugin"`
+	MinimumVersion   string   `json:"minimum_version"`
+	Contract         string   `json:"contract"`
+	CommandPrefix    string   `json:"command_prefix"`
+	LifecycleActions []string `json:"lifecycle_actions"`
 }
 
 func (c *computeCLI) runAgentSetup(ctx context.Context, args []string) error {
@@ -289,8 +296,11 @@ func managedRuntimeSetupPlan(runtimeSelection string) *agentSetupManagedRuntimeP
 		return nil
 	}
 	return &agentSetupManagedRuntimePlan{
-		Plugin:         "workflow-plugin-compute-container",
-		MinimumVersion: "v0.4.0",
+		Plugin:           managedRuntimeContainerPlugin,
+		MinimumVersion:   managedRuntimeContainerMinimum,
+		Contract:         managedRuntimeInstallerContract,
+		CommandPrefix:    managedRuntimeCommandPrefix,
+		LifecycleActions: []string{"install", "doctor", "uninstall", "reinstall"},
 	}
 }
 
