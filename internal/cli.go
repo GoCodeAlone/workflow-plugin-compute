@@ -28,7 +28,7 @@ const (
 	managedRuntimeContainerPlugin      = "workflow-plugin-compute-container"
 	managedRuntimeContainerMinimum     = "v0.5.0"
 	managedRuntimeInstallerContract    = "ManagedRuntimeBundleInstaller"
-	managedRuntimeCommandPrefix        = "wfctl plugin run --ensure-installed workflow-plugin-compute-container@v0.5.0 -- managed-runtime"
+	managedRuntimeCommandPrefix        = "wfctl plugin run --ensure-installed " + managedRuntimeContainerPlugin + "@" + managedRuntimeContainerMinimum + " -- managed-runtime"
 )
 
 type computeCLI struct {
