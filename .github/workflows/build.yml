@@ -74,9 +74,9 @@ jobs:
           printf '%s\n' "$dry_run_output" | grep -q '"requested_runtime": "managed-containerd"'
           printf '%s\n' "$dry_run_output" | grep -q '"runtime_selection": "auto"'
           printf '%s\n' "$dry_run_output" | grep -q '"plugin": "workflow-plugin-compute-container"'
-          printf '%s\n' "$dry_run_output" | grep -q '"minimum_version": "v0.5.0"'
+          printf '%s\n' "$dry_run_output" | grep -q '"minimum_version": "v0.5.1"'
           printf '%s\n' "$dry_run_output" | grep -q '"contract": "ManagedRuntimeBundleInstaller"'
-          printf '%s\n' "$dry_run_output" | grep -q '"command_prefix": "wfctl plugin run --ensure-installed workflow-plugin-compute-container@v0.5.0 -- managed-runtime"'
+          printf '%s\n' "$dry_run_output" | grep -q '"command_prefix": "wfctl plugin run --ensure-installed workflow-plugin-compute-container@v0.5.1 -- managed-runtime"'
           for lifecycle_action in install doctor uninstall reinstall; do
             printf '%s\n' "$dry_run_output" | grep -q "\"$lifecycle_action\""
           done
