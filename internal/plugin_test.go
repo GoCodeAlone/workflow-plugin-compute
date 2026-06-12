@@ -56,7 +56,7 @@ func TestT545_PluginManifestDeclaresManagedRuntimeDependencies(t *testing.T) {
 	}
 	want := map[string]string{
 		"workflow-plugin-compute-core":      ">=0.6.0",
-		"workflow-plugin-compute-container": ">=0.4.0",
+		"workflow-plugin-compute-container": ">=0.5.0",
 	}
 	for _, dependency := range manifest.Dependencies {
 		if _, ok := want[dependency.Name]; !ok {

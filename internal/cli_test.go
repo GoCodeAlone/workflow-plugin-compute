@@ -121,8 +121,18 @@ func TestT545_CLIAgentSetupDryRunRendersManagedContainerdRuntimePlan(t *testing.
 	if plan.ManagedRuntime.Plugin != "workflow-plugin-compute-container" {
 		t.Fatalf("managed runtime plugin = %q", plan.ManagedRuntime.Plugin)
 	}
-	if plan.ManagedRuntime.MinimumVersion != "v0.4.0" {
+	if plan.ManagedRuntime.MinimumVersion != "v0.5.0" {
 		t.Fatalf("managed runtime minimum version = %q", plan.ManagedRuntime.MinimumVersion)
+	}
+	if plan.ManagedRuntime.Contract != "ManagedRuntimeBundleInstaller" {
+		t.Fatalf("managed runtime contract = %q", plan.ManagedRuntime.Contract)
+	}
+	if plan.ManagedRuntime.CommandPrefix != "wfctl plugin run --ensure-installed workflow-plugin-compute-container@v0.5.0 -- managed-runtime" {
+		t.Fatalf("managed runtime command prefix = %q", plan.ManagedRuntime.CommandPrefix)
+	}
+	wantActions := strings.Join([]string{"install", "doctor", "uninstall", "reinstall"}, ",")
+	if gotActions := strings.Join(plan.ManagedRuntime.LifecycleActions, ","); gotActions != wantActions {
+		t.Fatalf("managed runtime lifecycle actions = %q, want %q", gotActions, wantActions)
 	}
 	if !strings.Contains(plan.AgentSetupCommand, "--runtime auto") {
 		t.Fatalf("agent setup command should remain compatible with current workflow-compute runtime selection: %s", plan.AgentSetupCommand)
