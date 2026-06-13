@@ -861,7 +861,6 @@ func (c *computeCLI) runNetworkAuditsList(ctx context.Context, args []string) er
 	projection := fs.String("projection", "", "projection mode, such as release-a")
 	schema := fs.String("schema", protocol.NetworkAuditListSchemaProjectionV1, "response schema, such as projection.v1")
 	decision := fs.String("decision", "", "decision filter: allowed or blocked")
-	_ = fs.Bool("json", false, "write sanitized JSON output")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
@@ -892,7 +891,6 @@ func (c *computeCLI) runNetworkAuditsAuditState(ctx context.Context, args []stri
 	projection := fs.String("projection", "release-a", "projection mode for server-backed audit evidence")
 	schema := fs.String("schema", protocol.NetworkAuditListSchemaProjectionV1, "response schema, such as projection.v1")
 	decision := fs.String("decision", "", "decision filter: allowed or blocked")
-	_ = fs.Bool("json", false, "write sanitized JSON output")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
@@ -935,7 +933,6 @@ func (c *computeCLI) runNetworkAuditsRawCompatDryRun(ctx context.Context, args [
 	handle := fs.String("handle", "", "opaque dry-run handle for use or revoke")
 	orgID := fs.String("org", "", "target org id for mint/use scope check")
 	poolID := fs.String("pool", "", "target pool id for mint/use scope check")
-	_ = fs.Bool("json", false, "write sanitized JSON output")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil

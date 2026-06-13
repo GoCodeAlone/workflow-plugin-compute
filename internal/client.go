@@ -273,9 +273,10 @@ func (c *computeClient) listNetworkAudits(ctx context.Context, query networkAudi
 	if strings.TrimSpace(query.Schema) == "" {
 		query.Schema = protocol.NetworkAuditListSchemaProjectionV1
 	}
+	schema := strings.TrimSpace(query.Schema)
 	values := make(url.Values)
 	setQueryValue(values, "projection", query.Projection)
-	setQueryValue(values, "schema", query.Schema)
+	setQueryValue(values, "schema", schema)
 	setQueryValue(values, "decision", query.Decision)
 	path := "/v1/network-audits"
 	if encoded := values.Encode(); encoded != "" {
@@ -284,7 +285,7 @@ func (c *computeClient) listNetworkAudits(ctx context.Context, query networkAudi
 	var out networkAuditsResponse
 	if err := c.doJSONWithHeaders(ctx, http.MethodGet, path, nil, http.StatusOK, &out, map[string]string{
 		protocol.NetworkAuditClientCompatHeader: "workflow-plugin-compute",
-		protocol.NetworkAuditListSchemaHeader:   protocol.NetworkAuditListSchemaProjectionV1,
+		protocol.NetworkAuditListSchemaHeader:   schema,
 	}); err != nil {
 		return networkAuditsResponse{}, err
 	}

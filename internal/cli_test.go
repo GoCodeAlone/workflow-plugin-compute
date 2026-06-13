@@ -103,7 +103,6 @@ func TestT586_CLINetworkAuditsAuditStateResolvesProviderConfigAuthAndProjection(
 		"--provider-ref", "wfcompute",
 		"--projection", "release-a",
 		"--decision", "blocked",
-		"--json",
 	})
 	if code != 0 {
 		t.Fatalf("RunCLI code=%d stderr=%s", code, stderr.String())
@@ -129,6 +128,42 @@ func TestT586_CLINetworkAuditsAuditStateResolvesProviderConfigAuthAndProjection(
 	}
 }
 
+func TestT586_CLINetworkAuditsListUsesResolvedSchemaInQueryAndHeader(t *testing.T) {
+	var gotQuery, gotSchemaHeader string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/v1/network-audits" {
+			t.Fatalf("request: %s %s", r.Method, r.URL.Path)
+		}
+		gotQuery = r.URL.RawQuery
+		gotSchemaHeader = r.Header.Get(protocol.NetworkAuditListSchemaHeader)
+		_ = json.NewEncoder(w).Encode(networkAuditsResponse{
+			Projections: []protocol.NetworkAuditRecordProjection{{
+				RecordRef:   "network-audit-ref-v1:stable:abc",
+				RefKeyEpoch: protocol.NetworkAuditRefKeyEpoch,
+			}},
+			Summary:           networkAuditsSummary{Total: 1},
+			ProjectionSummary: networkAuditProjectionSummary{Projected: 1},
+		})
+	}))
+	defer srv.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := newCLI(&stdout, &stderr).RunCLI([]string{
+		"compute", "network-audits", "list",
+		"--server", srv.URL,
+		"--schema", "projection.experimental",
+	})
+	if code != 0 {
+		t.Fatalf("RunCLI code=%d stderr=%s", code, stderr.String())
+	}
+	if gotQuery != "schema=projection.experimental" {
+		t.Fatalf("query: got %q", gotQuery)
+	}
+	if gotSchemaHeader != "projection.experimental" {
+		t.Fatalf("schema header: got %q", gotSchemaHeader)
+	}
+}
+
 func TestT586_CLINetworkAuditsRejectsMissingExplicitTokenEnvBeforeFallback(t *testing.T) {
 	t.Setenv("COMPUTE_API_TOKEN", "fallback-token")
 	var calls int
@@ -142,7 +177,6 @@ func TestT586_CLINetworkAuditsRejectsMissingExplicitTokenEnvBeforeFallback(t *te
 		"compute", "network-audits", "audit-state",
 		"--server", srv.URL,
 		"--token-env", "MISSING_AUDIT_TOKEN",
-		"--json",
 	})
 
 	if code == 0 {
@@ -198,7 +232,6 @@ func TestT586_CLINetworkAuditsRawCompatDryRunUsesServerBackedAPIAndRedacts(t *te
 		"--action", "mint",
 		"--org", "org-1",
 		"--pool", "pool-1",
-		"--json",
 	})
 	if code != 0 {
 		t.Fatalf("RunCLI code=%d stderr=%s", code, stderr.String())

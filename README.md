@@ -189,8 +189,7 @@ wfctl plugin run --ensure-installed workflow-plugin-compute -- \
   --config workflow.yaml \
   --provider-ref compute \
   --projection release-a \
-  --expected-ref-key-epoch network-audit-ref-v1 \
-  --json
+  --expected-ref-key-epoch network-audit-ref-v1
 ```
 
 `--config` and `--provider-ref` load the `compute.provider` module, including
