@@ -1007,7 +1007,11 @@ func (f *cliNetworkAuditFlags) client(args []string) (*computeClient, error) {
 		}
 	}
 	if token == "" && strings.TrimSpace(f.tokenEnv) != "" {
-		token = strings.TrimSpace(os.Getenv(strings.TrimSpace(f.tokenEnv)))
+		tokenEnv := strings.TrimSpace(f.tokenEnv)
+		token = strings.TrimSpace(os.Getenv(tokenEnv))
+		if token == "" {
+			return nil, fmt.Errorf("--token-env is set but the environment variable is empty")
+		}
 	}
 	if token == "" && provider != nil {
 		resolved, err := resolveCLIRefFromEnvironment(provider.AuthTokenRef)

@@ -74,6 +74,12 @@ func TestT586_CLINetworkAuditsAuditStateResolvesProviderConfigAuthAndProjection(
 		if r.Header.Get("Authorization") != "Bearer resolved-token" {
 			t.Fatalf("auth header: got %q", r.Header.Get("Authorization"))
 		}
+		if r.Header.Get(protocol.NetworkAuditListSchemaHeader) != protocol.NetworkAuditListSchemaProjectionV1 {
+			t.Fatalf("schema header: got %q", r.Header.Get(protocol.NetworkAuditListSchemaHeader))
+		}
+		if r.Header.Get(protocol.NetworkAuditClientCompatHeader) != "workflow-plugin-compute" {
+			t.Fatalf("compat header: got %q", r.Header.Get(protocol.NetworkAuditClientCompatHeader))
+		}
 		gotQuery = r.URL.RawQuery
 		_ = json.NewEncoder(w).Encode(networkAuditsResponse{
 			Projections: []protocol.NetworkAuditRecordProjection{{
@@ -120,6 +126,33 @@ func TestT586_CLINetworkAuditsAuditStateResolvesProviderConfigAuthAndProjection(
 		if strings.Contains(out, forbidden) || strings.Contains(stderr.String(), forbidden) {
 			t.Fatalf("network audit output leaked %q: stdout=%s stderr=%s", forbidden, out, stderr.String())
 		}
+	}
+}
+
+func TestT586_CLINetworkAuditsRejectsMissingExplicitTokenEnvBeforeFallback(t *testing.T) {
+	t.Setenv("COMPUTE_API_TOKEN", "fallback-token")
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		calls++
+	}))
+	defer srv.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := newCLI(&stdout, &stderr).RunCLI([]string{
+		"compute", "network-audits", "audit-state",
+		"--server", srv.URL,
+		"--token-env", "MISSING_AUDIT_TOKEN",
+		"--json",
+	})
+
+	if code == 0 {
+		t.Fatal("expected missing explicit token env to fail")
+	}
+	if calls != 0 {
+		t.Fatalf("expected local validation before fallback API call, calls=%d", calls)
+	}
+	if strings.Contains(stdout.String(), "fallback-token") || strings.Contains(stderr.String(), "fallback-token") {
+		t.Fatalf("output leaked fallback token: stdout=%s stderr=%s", stdout.String(), stderr.String())
 	}
 }
 
