@@ -13,8 +13,10 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/GoCodeAlone/workflow-compute/pkg/protocol"
+	workflowconfig "github.com/GoCodeAlone/workflow/config"
 	sdk "github.com/GoCodeAlone/workflow/plugin/external/sdk"
 )
 
@@ -67,10 +69,10 @@ func (c *computeCLI) RunCLI(args []string) int {
 
 func (c *computeCLI) run(ctx context.Context, args []string) error {
 	if len(args) == 0 || args[0] != "compute" {
-		return errors.New("usage: wfctl compute <agent|enroll|pools|run|submit|audit|accounting|github-runner>")
+		return errors.New("usage: wfctl compute <agent|enroll|pools|run|submit|audit|accounting|github-runner|network-audits>")
 	}
 	if len(args) == 1 {
-		return errors.New("usage: wfctl compute <agent|enroll|pools|run|submit|audit|accounting|github-runner>")
+		return errors.New("usage: wfctl compute <agent|enroll|pools|run|submit|audit|accounting|github-runner|network-audits>")
 	}
 	switch args[1] {
 	case "agent":
@@ -89,6 +91,8 @@ func (c *computeCLI) run(ctx context.Context, args []string) error {
 		return c.runAccounting(ctx, args[2:])
 	case "github-runner":
 		return c.runGitHubRunner(ctx, args[2:])
+	case "network-audits":
+		return c.runNetworkAudits(ctx, args[2:])
 	default:
 		return fmt.Errorf("unknown wfctl compute command %q", args[1])
 	}
@@ -833,6 +837,323 @@ func (c *computeCLI) runGitHubRunnerBridgeJob(ctx context.Context, args []string
 		"policy_id":  task.PolicyID,
 		"input_hash": task.InputHash,
 	})
+}
+
+func (c *computeCLI) runNetworkAudits(ctx context.Context, args []string) error {
+	if len(args) == 0 {
+		return errors.New("usage: wfctl compute network-audits <list|audit-state|raw-compat-dry-run>")
+	}
+	switch args[0] {
+	case "list":
+		return c.runNetworkAuditsList(ctx, args[1:])
+	case "audit-state":
+		return c.runNetworkAuditsAuditState(ctx, args[1:])
+	case "raw-compat-dry-run":
+		return c.runNetworkAuditsRawCompatDryRun(ctx, args[1:])
+	default:
+		return fmt.Errorf("unknown wfctl compute network-audits command %q", args[0])
+	}
+}
+
+func (c *computeCLI) runNetworkAuditsList(ctx context.Context, args []string) error {
+	fs := c.newFlagSet("compute network-audits list")
+	common := addCLINetworkAuditFlags(fs)
+	projection := fs.String("projection", "", "projection mode, such as release-a")
+	schema := fs.String("schema", protocol.NetworkAuditListSchemaProjectionV1, "response schema, such as projection.v1")
+	decision := fs.String("decision", "", "decision filter: allowed or blocked")
+	_ = fs.Bool("json", false, "write sanitized JSON output")
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return err
+	}
+	if err := requireExpectedNetworkAuditRefKeyEpoch(common.expectedRefKeyEpoch); err != nil {
+		return err
+	}
+	client, err := common.client(args)
+	if err != nil {
+		return err
+	}
+	resp, err := client.listNetworkAudits(ctx, networkAuditsQuery{
+		Projection: strings.TrimSpace(*projection),
+		Schema:     strings.TrimSpace(*schema),
+		Decision:   strings.TrimSpace(*decision),
+	})
+	if err != nil {
+		return sanitizeNetworkAuditRequestError(err, "network audit list request failed")
+	}
+	return writeJSON(c.stdout, sanitizeNetworkAuditsResponse(resp))
+}
+
+func (c *computeCLI) runNetworkAuditsAuditState(ctx context.Context, args []string) error {
+	fs := c.newFlagSet("compute network-audits audit-state")
+	common := addCLINetworkAuditFlags(fs)
+	projection := fs.String("projection", "release-a", "projection mode for server-backed audit evidence")
+	schema := fs.String("schema", protocol.NetworkAuditListSchemaProjectionV1, "response schema, such as projection.v1")
+	decision := fs.String("decision", "", "decision filter: allowed or blocked")
+	_ = fs.Bool("json", false, "write sanitized JSON output")
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return err
+	}
+	if err := requireExpectedNetworkAuditRefKeyEpoch(common.expectedRefKeyEpoch); err != nil {
+		return err
+	}
+	client, err := common.client(args)
+	if err != nil {
+		return err
+	}
+	resp, err := client.listNetworkAudits(ctx, networkAuditsQuery{
+		Projection: strings.TrimSpace(*projection),
+		Schema:     strings.TrimSpace(*schema),
+		Decision:   strings.TrimSpace(*decision),
+	})
+	if err != nil {
+		return sanitizeNetworkAuditRequestError(err, "network audit audit-state request failed")
+	}
+	return writeJSON(c.stdout, networkAuditStateEvidence{
+		Source:               "server",
+		ProjectionReady:      true,
+		RefKeyEpochRequired:  common.expectedRefKeyEpoch,
+		RefKeyEpochMismatch:  false,
+		Summary:              resp.Summary,
+		ProjectionSummary:    resp.ProjectionSummary,
+		Projected:            resp.ProjectionSummary.Projected,
+		Unsafe:               resp.ProjectionSummary.Unsafe,
+		ProjectionSampleRefs: projectionSampleRefs(resp.Projections, 3),
+		Projections:          sanitizeNetworkAuditProjections(resp.Projections),
+	})
+}
+
+func (c *computeCLI) runNetworkAuditsRawCompatDryRun(ctx context.Context, args []string) error {
+	fs := c.newFlagSet("compute network-audits raw-compat-dry-run")
+	common := addCLINetworkAuditFlags(fs)
+	action := fs.String("action", "use", "dry-run action: mint, use, or revoke")
+	handle := fs.String("handle", "", "opaque dry-run handle for use or revoke")
+	orgID := fs.String("org", "", "target org id for mint/use scope check")
+	poolID := fs.String("pool", "", "target pool id for mint/use scope check")
+	_ = fs.Bool("json", false, "write sanitized JSON output")
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return err
+	}
+	if err := requireExpectedNetworkAuditRefKeyEpoch(common.expectedRefKeyEpoch); err != nil {
+		return err
+	}
+	client, err := common.client(args)
+	if err != nil {
+		return err
+	}
+	resp, err := client.networkAuditRawCompatDryRun(ctx, networkAuditRawCompatDryRunRequest{
+		Action:              strings.TrimSpace(*action),
+		ExpectedRefKeyEpoch: common.expectedRefKeyEpoch,
+		Handle:              strings.TrimSpace(*handle),
+		OrgID:               strings.TrimSpace(*orgID),
+		PoolID:              strings.TrimSpace(*poolID),
+	})
+	if err != nil {
+		return sanitizeNetworkAuditRequestError(err, "network audit raw-compat dry-run request failed")
+	}
+	return writeJSON(c.stdout, sanitizeNetworkAuditDryRunResponse(resp))
+}
+
+type cliNetworkAuditFlags struct {
+	serverURL           string
+	token               string
+	tokenEnv            string
+	configPath          string
+	providerRef         string
+	timeout             time.Duration
+	expectedRefKeyEpoch string
+}
+
+func addCLINetworkAuditFlags(fs *flag.FlagSet) *cliNetworkAuditFlags {
+	common := &cliNetworkAuditFlags{}
+	fs.StringVar(&common.serverURL, "server", "", "workflow-compute server URL")
+	fs.StringVar(&common.token, "token", "", "API bearer token")
+	fs.StringVar(&common.tokenEnv, "token-env", "", "environment variable containing the API bearer token")
+	fs.StringVar(&common.configPath, "config", "", "Workflow config file containing a compute.provider module")
+	fs.StringVar(&common.providerRef, "provider-ref", "", "compute.provider module name in --config")
+	fs.DurationVar(&common.timeout, "request-timeout", 30*time.Second, "request timeout")
+	fs.StringVar(&common.expectedRefKeyEpoch, "expected-ref-key-epoch", protocol.NetworkAuditRefKeyEpoch, "expected network audit ref-key epoch")
+	return common
+}
+
+func (f *cliNetworkAuditFlags) client(args []string) (*computeClient, error) {
+	serverURL := strings.TrimSpace(f.serverURL)
+	token := strings.TrimSpace(f.token)
+	timeout := f.timeout
+	var provider *providerConfig
+	if strings.TrimSpace(f.configPath) != "" {
+		resolved, err := resolveProviderConfig(f.configPath, f.providerRef)
+		if err != nil {
+			return nil, err
+		}
+		provider = &resolved
+		if !flagSpecified(args, "server") {
+			serverURL = provider.ServerURL
+		}
+		if !flagSpecified(args, "request-timeout") && provider.RequestTimeout != "" {
+			parsed, err := time.ParseDuration(provider.RequestTimeout)
+			if err != nil {
+				return nil, fmt.Errorf("provider request_timeout: %w", err)
+			}
+			timeout = parsed
+		}
+	}
+	if token == "" && strings.TrimSpace(f.tokenEnv) != "" {
+		token = strings.TrimSpace(os.Getenv(strings.TrimSpace(f.tokenEnv)))
+	}
+	if token == "" && provider != nil {
+		resolved, err := resolveCLIRefFromEnvironment(provider.AuthTokenRef)
+		if err != nil {
+			return nil, err
+		}
+		token = resolved
+	}
+	if token == "" {
+		token = strings.TrimSpace(os.Getenv("COMPUTE_API_TOKEN"))
+	}
+	if serverURL == "" {
+		serverURL = defaultServerURL()
+	}
+	return newComputeClient(serverURL, token, timeout)
+}
+
+func resolveProviderConfig(configPath, providerRef string) (providerConfig, error) {
+	cfg, err := workflowconfig.LoadFromFile(configPath)
+	if err != nil {
+		return providerConfig{}, fmt.Errorf("load Workflow config: %w", err)
+	}
+	providerRef = strings.TrimSpace(providerRef)
+	var matches []workflowconfig.ModuleConfig
+	for _, module := range cfg.Modules {
+		if module.Type != "compute.provider" {
+			continue
+		}
+		if providerRef == "" || module.Name == providerRef {
+			matches = append(matches, module)
+		}
+	}
+	if providerRef != "" && len(matches) == 0 {
+		return providerConfig{}, fmt.Errorf("compute.provider module not found")
+	}
+	if providerRef == "" && len(matches) == 0 {
+		return providerConfig{}, fmt.Errorf("Workflow config does not define a compute.provider module")
+	}
+	if providerRef == "" && len(matches) > 1 {
+		return providerConfig{}, fmt.Errorf("--provider-ref is required when config has multiple compute.provider modules")
+	}
+	module, err := newProviderModule(matches[0].Name, matches[0].Config)
+	if err != nil {
+		return providerConfig{}, err
+	}
+	return module.config, nil
+}
+
+func resolveCLIRefFromEnvironment(ref string) (string, error) {
+	prefix, key, ok := strings.Cut(strings.TrimSpace(ref), ":")
+	if !ok || (prefix != "secret" && prefix != "config") || strings.TrimSpace(key) == "" {
+		return "", fmt.Errorf("auth token ref must use secret: or config:")
+	}
+	for _, candidate := range cliRefEnvCandidates(key) {
+		if value := strings.TrimSpace(os.Getenv(candidate)); value != "" {
+			return value, nil
+		}
+	}
+	return "", fmt.Errorf("auth token ref could not be resolved from environment")
+}
+
+func cliRefEnvCandidates(key string) []string {
+	normalized := strings.Map(func(r rune) rune {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			return unicode.ToUpper(r)
+		}
+		return '_'
+	}, strings.TrimSpace(key))
+	normalized = strings.Trim(normalized, "_")
+	if normalized == "" {
+		return nil
+	}
+	candidates := []string{normalized}
+	if !strings.HasPrefix(normalized, "COMPUTE_") {
+		candidates = append(candidates, "COMPUTE_"+normalized)
+	}
+	return candidates
+}
+
+func requireExpectedNetworkAuditRefKeyEpoch(expected string) error {
+	if strings.TrimSpace(expected) != protocol.NetworkAuditRefKeyEpoch {
+		return fmt.Errorf("expected network audit ref-key epoch does not match this plugin")
+	}
+	return nil
+}
+
+type networkAuditStateEvidence struct {
+	Source               string                                  `json:"source"`
+	ProjectionReady      bool                                    `json:"projection_ready"`
+	RefKeyEpochRequired  string                                  `json:"ref_key_epoch_required"`
+	RefKeyEpochMismatch  bool                                    `json:"ref_key_epoch_mismatch"`
+	Summary              networkAuditsSummary                    `json:"summary"`
+	ProjectionSummary    networkAuditProjectionSummary           `json:"projection_summary,omitempty"`
+	Projected            int                                     `json:"projected"`
+	Unsafe               int                                     `json:"unsafe,omitempty"`
+	ProjectionSampleRefs []string                                `json:"projection_sample_refs,omitempty"`
+	Findings             []networkAuditDryRunFinding             `json:"findings,omitempty"`
+	Projections          []protocol.NetworkAuditRecordProjection `json:"projections,omitempty"`
+}
+
+func projectionSampleRefs(projections []protocol.NetworkAuditRecordProjection, limit int) []string {
+	refs := make([]string, 0, min(len(projections), limit))
+	for _, projection := range projections {
+		if strings.TrimSpace(projection.RecordRef) == "" {
+			continue
+		}
+		refs = append(refs, projection.RecordRef)
+		if len(refs) == limit {
+			break
+		}
+	}
+	return refs
+}
+
+func sanitizeNetworkAuditsResponse(resp networkAuditsResponse) networkAuditsResponse {
+	resp.Projections = sanitizeNetworkAuditProjections(resp.Projections)
+	return resp
+}
+
+func sanitizeNetworkAuditDryRunResponse(resp networkAuditRawCompatDryRunResponse) networkAuditRawCompatDryRunResponse {
+	resp.Handle = ""
+	resp.Error = ""
+	for i := range resp.Findings {
+		resp.Findings[i].Reason = ""
+	}
+	resp.Projections = sanitizeNetworkAuditProjections(resp.Projections)
+	return resp
+}
+
+func sanitizeNetworkAuditProjections(projections []protocol.NetworkAuditRecordProjection) []protocol.NetworkAuditRecordProjection {
+	safe := make([]protocol.NetworkAuditRecordProjection, len(projections))
+	copy(safe, projections)
+	for i := range safe {
+		safe[i].Labels = nil
+		safe[i].ResourceUsage.LimitHit = ""
+	}
+	return safe
+}
+
+func sanitizeNetworkAuditRequestError(err error, message string) error {
+	for status := 400; status < 600; status++ {
+		if isHTTPStatusError(err, status) {
+			return fmt.Errorf("%s with status %d", message, status)
+		}
+	}
+	return errors.New(message)
 }
 
 func rewardsForAccount(rewards []map[string]any, accountID string) []map[string]any {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -44,6 +45,75 @@ type contributionList struct {
 
 type rewardList struct {
 	Rewards []map[string]any `json:"rewards"`
+}
+
+type networkAuditsQuery struct {
+	Projection string
+	Schema     string
+	Decision   string
+}
+
+type networkAuditsResponse struct {
+	Projections       []protocol.NetworkAuditRecordProjection `json:"projections,omitempty"`
+	Summary           networkAuditsSummary                    `json:"summary"`
+	ProjectionSummary networkAuditProjectionSummary           `json:"projection_summary,omitempty"`
+}
+
+type networkAuditsSummary struct {
+	Total   int `json:"total"`
+	Allowed int `json:"allowed"`
+	Blocked int `json:"blocked"`
+}
+
+type networkAuditProjectionSummary struct {
+	Projected int `json:"projected"`
+	Unsafe    int `json:"unsafe,omitempty"`
+}
+
+type networkAuditRawCompatDryRunRequest struct {
+	Action              string   `json:"action"`
+	ExpectedRefKeyEpoch string   `json:"expected_ref_key_epoch"`
+	Handle              string   `json:"handle,omitempty"`
+	OrgID               string   `json:"org_id,omitempty"`
+	PoolID              string   `json:"pool_id,omitempty"`
+	Scopes              []string `json:"scopes,omitempty"`
+	TargetBearerToken   string   `json:"target_bearer_token,omitempty"`
+	RawCredential       string   `json:"raw_credential,omitempty"`
+	TargetSubject       string   `json:"target_subject,omitempty"`
+}
+
+type networkAuditRawCompatDryRunResponse struct {
+	ProjectionReady bool                                    `json:"projection_ready"`
+	RefKeyEpoch     string                                  `json:"ref_key_epoch,omitempty"`
+	Handle          string                                  `json:"handle,omitempty"`
+	HandleRef       string                                  `json:"handle_ref,omitempty"`
+	ExpiresAt       time.Time                               `json:"expires_at,omitempty"`
+	Summary         networkAuditsSummary                    `json:"summary,omitempty"`
+	Findings        []networkAuditDryRunFinding             `json:"findings,omitempty"`
+	Error           string                                  `json:"error,omitempty"`
+	Projections     []protocol.NetworkAuditRecordProjection `json:"projections,omitempty"`
+}
+
+type networkAuditDryRunFinding struct {
+	Code      string `json:"code"`
+	RecordRef string `json:"record_ref,omitempty"`
+	Reason    string `json:"reason,omitempty"`
+}
+
+type httpStatusError struct {
+	method string
+	path   string
+	status int
+	want   []int
+}
+
+func (e httpStatusError) Error() string {
+	return fmt.Sprintf("%s %s: got status %d", e.method, e.path, e.status)
+}
+
+func isHTTPStatusError(err error, status int) bool {
+	var statusErr httpStatusError
+	return errors.As(err, &statusErr) && statusErr.status == status
 }
 
 type githubRunnerRegistrationRequest struct {
@@ -199,6 +269,39 @@ func (c *computeClient) rewards(ctx context.Context) (rewardList, error) {
 	return out, nil
 }
 
+func (c *computeClient) listNetworkAudits(ctx context.Context, query networkAuditsQuery) (networkAuditsResponse, error) {
+	if strings.TrimSpace(query.Schema) == "" {
+		query.Schema = protocol.NetworkAuditListSchemaProjectionV1
+	}
+	values := make(url.Values)
+	setQueryValue(values, "projection", query.Projection)
+	setQueryValue(values, "schema", query.Schema)
+	setQueryValue(values, "decision", query.Decision)
+	path := "/v1/network-audits"
+	if encoded := values.Encode(); encoded != "" {
+		path += "?" + encoded
+	}
+	var out networkAuditsResponse
+	if err := c.doJSONWithHeaders(ctx, http.MethodGet, path, nil, http.StatusOK, &out, map[string]string{
+		protocol.NetworkAuditClientCompatHeader: "workflow-plugin-compute",
+		protocol.NetworkAuditListSchemaHeader:   protocol.NetworkAuditListSchemaProjectionV1,
+	}); err != nil {
+		return networkAuditsResponse{}, err
+	}
+	return out, nil
+}
+
+func (c *computeClient) networkAuditRawCompatDryRun(ctx context.Context, req networkAuditRawCompatDryRunRequest) (networkAuditRawCompatDryRunResponse, error) {
+	var out networkAuditRawCompatDryRunResponse
+	err := c.doJSONOneOf(ctx, http.MethodPost, "/v1/network-audits/raw-compat-dry-run", req, []int{http.StatusOK, http.StatusCreated}, &out, map[string]string{
+		protocol.NetworkAuditClientCompatHeader: "workflow-plugin-compute",
+	})
+	if err != nil {
+		return networkAuditRawCompatDryRunResponse{}, err
+	}
+	return out, nil
+}
+
 func (c *computeClient) registerGitHubRunner(ctx context.Context, req githubRunnerRegistrationRequest) (githubRunnerRegistration, error) {
 	var out struct {
 		Registration githubRunnerRegistration `json:"registration"`
@@ -244,6 +347,14 @@ func (c *computeClient) agentSetupFinalize(ctx context.Context, req protocol.Age
 }
 
 func (c *computeClient) doJSON(ctx context.Context, method, path string, body any, want int, out any) error {
+	return c.doJSONWithHeaders(ctx, method, path, body, want, out, nil)
+}
+
+func (c *computeClient) doJSONWithHeaders(ctx context.Context, method, path string, body any, want int, out any, headers map[string]string) error {
+	return c.doJSONOneOf(ctx, method, path, body, []int{want}, out, headers)
+}
+
+func (c *computeClient) doJSONOneOf(ctx context.Context, method, path string, body any, wants []int, out any, headers map[string]string) error {
 	var requestBody *bytes.Reader
 	if body != nil {
 		data, err := json.Marshal(body)
@@ -254,13 +365,17 @@ func (c *computeClient) doJSON(ctx context.Context, method, path string, body an
 	} else {
 		requestBody = bytes.NewReader(nil)
 	}
-	endpoint := c.baseURL.JoinPath(path)
-	req, err := http.NewRequestWithContext(ctx, method, endpoint.String(), requestBody)
+	req, err := http.NewRequestWithContext(ctx, method, c.requestURL(path), requestBody)
 	if err != nil {
 		return fmt.Errorf("create request: %w", err)
 	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
+	}
+	for key, value := range headers {
+		if strings.TrimSpace(value) != "" {
+			req.Header.Set(key, value)
+		}
 	}
 	if c.token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.token)
@@ -270,11 +385,33 @@ func (c *computeClient) doJSON(ctx context.Context, method, path string, body an
 		return fmt.Errorf("%s %s: %w", method, path, err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != want {
-		return fmt.Errorf("%s %s: got status %d want %d", method, path, resp.StatusCode, want)
+	if !statusWanted(resp.StatusCode, wants) {
+		return httpStatusError{method: method, path: path, status: resp.StatusCode, want: wants}
 	}
 	if out == nil {
 		return nil
 	}
 	return protocol.DecodeStrict(resp.Body, out)
+}
+
+func (c *computeClient) requestURL(path string) string {
+	pathOnly, rawQuery, _ := strings.Cut(path, "?")
+	endpoint := c.baseURL.JoinPath(strings.TrimPrefix(pathOnly, "/"))
+	endpoint.RawQuery = rawQuery
+	return endpoint.String()
+}
+
+func setQueryValue(values url.Values, key, value string) {
+	if strings.TrimSpace(value) != "" {
+		values.Set(key, strings.TrimSpace(value))
+	}
+}
+
+func statusWanted(status int, wants []int) bool {
+	for _, want := range wants {
+		if status == want {
+			return true
+		}
+	}
+	return false
 }

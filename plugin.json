@@ -18,7 +18,7 @@
     "cliCommands": [
       {
         "name": "compute",
-        "description": "Operate a workflow-compute control plane, including projectless agent setup"
+        "description": "Operate a workflow-compute control plane, including projectless agent setup and network audit checks"
       }
     ]
   },

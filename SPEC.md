@@ -22,6 +22,7 @@ C11: Plugin provider catalog details track `workflow-plugin-compute-core/protoco
 C12: Provider-specific typed steps belong in the owning provider plugin, not this generic compute adapter.
 C13: Provider catalog entries are imported compute-core contracts; product/application assumptions belong in the calling workflow or provider plugin.
 C14: Task residue policy submitted by this plugin is customer intent only; `workflow-compute` owns provider/product authority resolution, policy hashing, lease enforcement, and residue cleanup.
+C15: Network-audit operator commands in this plugin are public Workflow-facing wrappers around workflow-compute control-plane APIs; local file/Postgres host-state probing remains in workflow-compute.
 
 §I
 
@@ -34,7 +35,7 @@ step: `step.compute_dispatch` → submit task
 step: `step.compute_wait` → wait/read proof
 step: `step.compute_map` → fanout deterministic task set
 cmd: `workflow-plugin-compute` → external SDK entrypoint
-wfctl: `wfctl compute enroll|pools|run|submit|audit|accounting export|github-runner register|github-runner bridge-job` → plugin CLI → core API
+wfctl: `wfctl compute enroll|pools|run|submit|audit|accounting export|github-runner register|github-runner bridge-job|network-audits audit-state|network-audits raw-compat-dry-run` → plugin CLI → core API
 
 §V
 
@@ -62,6 +63,7 @@ V21: plugin step/CLI surfaces must not mention product-capture, BMW, edge lambda
 V22: `compute.provider_catalog` accepts typed `workflow-plugin-compute-core/protocol.ProviderContract` records from provider plugins without defining a parallel plugin-local provider schema
 V23: `step.compute_dispatch` and `step.compute_map` accept valid short-lived task `residue_policy`, reject malformed residue policy locally, and do not compute policy hashes or override provider/product authority
 V24: `wfctl compute agent setup --dry-run --runtime managed-containerd` renders setup intent plus `workflow-plugin-compute-container` dependency/installer-contract handoff metadata only; it must not duplicate backend IDs, bundle IDs, supported targets, downloads, verification, probes, or runtime support decisions from the runtime catalog.
+V25: `wfctl compute network-audits` resolves `compute.provider` config/auth refs or projectless server/token-env fallback, sends projected list schema plus expected ref-key epoch for dry-runs, and prints only sanitized projection/dry-run evidence without raw tokens, secret refs, dry-run handles, raw destinations, DSNs, credential strings, labels, or diagnostic reasons.
 
 §T
 
@@ -81,6 +83,7 @@ T12|x|remove provider-specific product-capture step/CLI/domain preview flattenin
 T13|x|keep provider catalog validation generic so external provider plugins can supply edge/product contracts without plugin-local provider schema|C13,I.module,V19,V22
 T14|x|submit optional short-lived task residue policy through dispatch/map steps without taking over core authority resolution|C14,I.step,V23
 T15|x|render projectless managed-containerd setup intent with compute-container dependency/installer-contract handoff metadata and no runtime catalog/install/probe ownership|I.cmd,I.wfctl,C8,V10,V24
+T16|x|add public network-audit wrapper commands for projected audit-state and server-backed raw-compat dry-run with config-resolved auth and redacted output|I.cmd,I.wfctl,C8,C15,V10,V12,V25
 
 §B
 
