@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -35,6 +37,245 @@ func TestT542_CLIAgentSetupHelpWorksProjectlessly(t *testing.T) {
 	}
 	if strings.Contains(help, "\n  -token string") {
 		t.Fatalf("setup invite help must not expose broad API token flags: %s", help)
+	}
+}
+
+func TestT586_CLINetworkAuditsAuditStateHelpWorksProjectlessly(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := newCLI(&stdout, &stderr).RunCLI([]string{"compute", "network-audits", "audit-state", "-help"})
+
+	if code != 0 {
+		t.Fatalf("RunCLI code=%d stderr=%s", code, stderr.String())
+	}
+	help := stderr.String()
+	for _, required := range []string{
+		"compute network-audits audit-state",
+		"-config",
+		"-provider-ref",
+		"-server",
+		"-token-env",
+		"-projection",
+		"-decision",
+		"-expected-ref-key-epoch",
+	} {
+		if !strings.Contains(help, required) {
+			t.Fatalf("help missing %q in %s", required, help)
+		}
+	}
+}
+
+func TestT586_CLINetworkAuditsAuditStateResolvesProviderConfigAuthAndProjection(t *testing.T) {
+	t.Setenv("COMPUTE_TOKEN", "resolved-token")
+	var gotQuery string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/v1/network-audits" {
+			t.Fatalf("request: %s %s", r.Method, r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer resolved-token" {
+			t.Fatalf("auth header: got %q", r.Header.Get("Authorization"))
+		}
+		if r.Header.Get(protocol.NetworkAuditListSchemaHeader) != protocol.NetworkAuditListSchemaProjectionV1 {
+			t.Fatalf("schema header: got %q", r.Header.Get(protocol.NetworkAuditListSchemaHeader))
+		}
+		if r.Header.Get(protocol.NetworkAuditClientCompatHeader) != "workflow-plugin-compute" {
+			t.Fatalf("compat header: got %q", r.Header.Get(protocol.NetworkAuditClientCompatHeader))
+		}
+		gotQuery = r.URL.RawQuery
+		_ = json.NewEncoder(w).Encode(networkAuditsResponse{
+			Projections: []protocol.NetworkAuditRecordProjection{{
+				RecordRef:   "network-audit-ref-v1:stable:abc",
+				RefKeyEpoch: protocol.NetworkAuditRefKeyEpoch,
+				Kind:        "endpoint",
+				Decision:    protocol.NetworkAuditDecisionBlocked,
+				Labels:      map[string]string{"unsafe": "token=should-not-print"},
+			}},
+			Summary:           networkAuditsSummary{Total: 1, Blocked: 1},
+			ProjectionSummary: networkAuditProjectionSummary{Projected: 1},
+		})
+	}))
+	defer srv.Close()
+	cfgPath := writeComputeProviderConfig(t, srv.URL, "secret:compute-token")
+
+	var stdout, stderr bytes.Buffer
+	code := newCLI(&stdout, &stderr).RunCLI([]string{
+		"compute", "network-audits", "audit-state",
+		"--config", cfgPath,
+		"--provider-ref", "wfcompute",
+		"--projection", "release-a",
+		"--decision", "blocked",
+	})
+	if code != 0 {
+		t.Fatalf("RunCLI code=%d stderr=%s", code, stderr.String())
+	}
+	if gotQuery != "decision=blocked&projection=release-a&schema=projection.v1" {
+		t.Fatalf("query: got %q", gotQuery)
+	}
+	out := stdout.String()
+	for _, required := range []string{
+		`"projection_ready": true`,
+		`"ref_key_epoch_required": "` + protocol.NetworkAuditRefKeyEpoch + `"`,
+		`"network-audit-ref-v1:stable:abc"`,
+		`"projected": 1`,
+	} {
+		if !strings.Contains(out, required) {
+			t.Fatalf("output missing %q in %s", required, out)
+		}
+	}
+	for _, forbidden := range []string{"resolved-token", "secret:compute-token", "token=should-not-print", "labels"} {
+		if strings.Contains(out, forbidden) || strings.Contains(stderr.String(), forbidden) {
+			t.Fatalf("network audit output leaked %q: stdout=%s stderr=%s", forbidden, out, stderr.String())
+		}
+	}
+}
+
+func TestT586_CLINetworkAuditsListUsesResolvedSchemaInQueryAndHeader(t *testing.T) {
+	var gotQuery, gotSchemaHeader string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/v1/network-audits" {
+			t.Fatalf("request: %s %s", r.Method, r.URL.Path)
+		}
+		gotQuery = r.URL.RawQuery
+		gotSchemaHeader = r.Header.Get(protocol.NetworkAuditListSchemaHeader)
+		_ = json.NewEncoder(w).Encode(networkAuditsResponse{
+			Projections: []protocol.NetworkAuditRecordProjection{{
+				RecordRef:   "network-audit-ref-v1:stable:abc",
+				RefKeyEpoch: protocol.NetworkAuditRefKeyEpoch,
+			}},
+			Summary:           networkAuditsSummary{Total: 1},
+			ProjectionSummary: networkAuditProjectionSummary{Projected: 1},
+		})
+	}))
+	defer srv.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := newCLI(&stdout, &stderr).RunCLI([]string{
+		"compute", "network-audits", "list",
+		"--server", srv.URL,
+		"--schema", "projection.experimental",
+	})
+	if code != 0 {
+		t.Fatalf("RunCLI code=%d stderr=%s", code, stderr.String())
+	}
+	if gotQuery != "schema=projection.experimental" {
+		t.Fatalf("query: got %q", gotQuery)
+	}
+	if gotSchemaHeader != "projection.experimental" {
+		t.Fatalf("schema header: got %q", gotSchemaHeader)
+	}
+}
+
+func TestT586_CLINetworkAuditsRejectsMissingExplicitTokenEnvBeforeFallback(t *testing.T) {
+	t.Setenv("COMPUTE_API_TOKEN", "fallback-token")
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		calls++
+	}))
+	defer srv.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := newCLI(&stdout, &stderr).RunCLI([]string{
+		"compute", "network-audits", "audit-state",
+		"--server", srv.URL,
+		"--token-env", "MISSING_AUDIT_TOKEN",
+	})
+
+	if code == 0 {
+		t.Fatal("expected missing explicit token env to fail")
+	}
+	if calls != 0 {
+		t.Fatalf("expected local validation before fallback API call, calls=%d", calls)
+	}
+	if strings.Contains(stdout.String(), "fallback-token") || strings.Contains(stderr.String(), "fallback-token") {
+		t.Fatalf("output leaked fallback token: stdout=%s stderr=%s", stdout.String(), stderr.String())
+	}
+}
+
+func TestT586_CLINetworkAuditsRawCompatDryRunUsesServerBackedAPIAndRedacts(t *testing.T) {
+	t.Setenv("AUDIT_TOKEN", "operator-token")
+	var gotReq networkAuditRawCompatDryRunRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/network-audits/raw-compat-dry-run" {
+			t.Fatalf("request: %s %s", r.Method, r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer operator-token" {
+			t.Fatalf("auth header: got %q", r.Header.Get("Authorization"))
+		}
+		if err := json.NewDecoder(r.Body).Decode(&gotReq); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(networkAuditRawCompatDryRunResponse{
+			ProjectionReady: true,
+			RefKeyEpoch:     protocol.NetworkAuditRefKeyEpoch,
+			Handle:          "opaque-handle",
+			HandleRef:       "network-audit-dry-run-handle-sha256-ref",
+			Error:           "diagnostic token=operator-token credential=raw-secret dsn=postgres://u:p@db/app",
+			Findings: []networkAuditDryRunFinding{{
+				Code:      "unsafe_legacy_row",
+				RecordRef: "network-audit-ref-v1:unsafe:abc",
+				Reason:    "leaked host cache.example.invalid token=operator-token",
+			}},
+			Projections: []protocol.NetworkAuditRecordProjection{{
+				RecordRef:   "network-audit-ref-v1:stable:abc",
+				RefKeyEpoch: protocol.NetworkAuditRefKeyEpoch,
+				Labels:      map[string]string{"unsafe": "credential=raw-secret"},
+			}},
+		})
+	}))
+	defer srv.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := newCLI(&stdout, &stderr).RunCLI([]string{
+		"compute", "network-audits", "raw-compat-dry-run",
+		"--server", srv.URL,
+		"--token-env", "AUDIT_TOKEN",
+		"--action", "mint",
+		"--org", "org-1",
+		"--pool", "pool-1",
+	})
+	if code != 0 {
+		t.Fatalf("RunCLI code=%d stderr=%s", code, stderr.String())
+	}
+	if gotReq.Action != "mint" || gotReq.ExpectedRefKeyEpoch != protocol.NetworkAuditRefKeyEpoch || gotReq.OrgID != "org-1" || gotReq.PoolID != "pool-1" {
+		t.Fatalf("dry-run request: %+v", gotReq)
+	}
+	out := stdout.String()
+	for _, required := range []string{"network-audit-dry-run-handle-sha256-ref", `"projection_ready": true`} {
+		if !strings.Contains(out, required) {
+			t.Fatalf("output missing %q in %s", required, out)
+		}
+	}
+	for _, forbidden := range []string{"opaque-handle", "operator-token", "raw-secret", "postgres://", "cache.example.invalid", "token=", "credential=", "labels"} {
+		if strings.Contains(out, forbidden) || strings.Contains(stderr.String(), forbidden) {
+			t.Fatalf("dry-run output leaked %q: stdout=%s stderr=%s", forbidden, out, stderr.String())
+		}
+	}
+}
+
+func TestT586_CLINetworkAuditsRejectsRefKeyEpochMismatchBeforeAPICall(t *testing.T) {
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		calls++
+	}))
+	defer srv.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := newCLI(&stdout, &stderr).RunCLI([]string{
+		"compute", "network-audits", "raw-compat-dry-run",
+		"--server", srv.URL,
+		"--action", "use",
+		"--handle", "opaque-handle",
+		"--expected-ref-key-epoch", "network-audit-ref-v0",
+	})
+
+	if code == 0 {
+		t.Fatal("expected ref-key epoch mismatch to fail")
+	}
+	if calls != 0 {
+		t.Fatalf("expected local validation before API call, calls=%d", calls)
+	}
+	if strings.Contains(stdout.String(), "opaque-handle") || strings.Contains(stderr.String(), "opaque-handle") {
+		t.Fatalf("output leaked handle: stdout=%s stderr=%s", stdout.String(), stderr.String())
 	}
 }
 
@@ -1036,4 +1277,21 @@ func TestV12_TokenRequiresHTTPSOrLoopback(t *testing.T) {
 	if _, err := newComputeClient("https://compute.example.test", "token", 0); err != nil {
 		t.Fatalf("https should be allowed with token: %v", err)
 	}
+}
+
+func writeComputeProviderConfig(t *testing.T, serverURL, authTokenRef string) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "workflow.yaml")
+	content := "modules:\n" +
+		"  - name: wfcompute\n" +
+		"    type: compute.provider\n" +
+		"    config:\n" +
+		"      server_url: " + serverURL + "\n" +
+		"      auth_token_ref: " + authTokenRef + "\n" +
+		"      request_timeout: 5s\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	return path
 }

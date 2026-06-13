@@ -178,6 +178,34 @@ start, runtime selection, verification, and credential persistence remain
 agent-runtime responsibilities; this plugin owns the projectless wfctl
 entrypoint and invite-scoped control-plane calls.
 
+## Network Audit Wrapper
+
+The plugin also exposes the public Workflow-facing operator wrapper for
+workflow-compute network-audit readiness and dry-run checks:
+
+```sh
+wfctl plugin run --ensure-installed workflow-plugin-compute -- \
+  compute network-audits audit-state \
+  --config workflow.yaml \
+  --provider-ref compute \
+  --projection release-a \
+  --expected-ref-key-epoch network-audit-ref-v1
+```
+
+`--config` and `--provider-ref` load the `compute.provider` module, including
+`server_url`, `auth_token_ref`, and `request_timeout`. The token ref is resolved
+from environment variables derived from the ref key, such as
+`secret:compute-token` resolving from `COMPUTE_TOKEN`; `--server`,
+`--token-env`, and `COMPUTE_API_TOKEN` remain available for projectless
+operator use. Output is sanitized: raw bearer tokens, secret refs, dry-run
+handles, raw destinations, DSNs, credential strings, projection labels, and
+unsafe diagnostic reasons are not printed.
+
+Use `compute network-audits raw-compat-dry-run` for server-backed mint/use/revoke
+preflight checks. The plugin sends the expected ref-key epoch with every dry-run
+request and refuses to call the server when the requested epoch does not match
+the plugin's protocol constant.
+
 ## Development
 
 ```sh
