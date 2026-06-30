@@ -49,6 +49,7 @@ func (p *computePlugin) StepTypes() []string {
 		"step.compute_dispatch",
 		"step.compute_wait",
 		"step.compute_map",
+		"step.compute_stream",
 	}
 }
 
@@ -60,6 +61,8 @@ func (p *computePlugin) CreateStep(typeName, name string, config map[string]any)
 		return newWaitStep(name, config)
 	case "step.compute_map":
 		return newMapStep(name, config)
+	case "step.compute_stream":
+		return newComputeStreamStep(name, config)
 	default:
 		return nil, fmt.Errorf("compute plugin: unknown step type %q", typeName)
 	}

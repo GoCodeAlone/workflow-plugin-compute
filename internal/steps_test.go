@@ -18,7 +18,7 @@ const testProviderImageRef = "ghcr.io/gocodealone/generic-provider@sha256:aaaaaa
 func TestStepTypes(t *testing.T) {
 	steps := NewPlugin().(interface{ StepTypes() []string })
 	got := steps.StepTypes()
-	want := []string{"step.compute_dispatch", "step.compute_wait", "step.compute_map"}
+	want := []string{"step.compute_dispatch", "step.compute_wait", "step.compute_map", "step.compute_stream"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("step types: got %#v", got)
 	}
