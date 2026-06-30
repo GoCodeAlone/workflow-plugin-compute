@@ -97,7 +97,7 @@ func streamConfigMap(serverURL string) map[string]any {
 
 func TestStepTypesIncludeComputeStream(t *testing.T) {
 	got := NewPlugin().(interface{ StepTypes() []string }).StepTypes()
-	want := []string{"step.compute_dispatch", "step.compute_wait", "step.compute_map", "step.compute_stream"}
+	want := []string{"step.compute_dispatch", "step.compute_wait", "step.compute_map", "step.compute_stream", "step.compute_chain"}
 	if len(got) != len(want) {
 		t.Fatalf("step types: got %#v", got)
 	}

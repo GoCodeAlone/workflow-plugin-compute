@@ -31,6 +31,10 @@ Examples:
   `workflow-plugin-compute-core/protocol.ProviderContract`; this plugin submits
   or waits on the resulting generic workflow-compute task without embedding
   provider business logic.
+- A content workflow submits a generic provider chain that fetches media
+  through a storage provider, transforms it through a media provider, and then
+  forwards artifact/content/stream references to the next provider without
+  embedding storage or media semantics in this plugin.
 - A live-video workflow submits `step.compute_stream` to create a
   `video-stream` task, while `workflow-plugin-stream` owns the MediaMTX provider
   contract, runtime adapter, ingest descriptor, auth hook, and stream proof
@@ -126,6 +130,122 @@ effective lease policy and enforces workspace reuse or isolation.
 For fanout work, use `step.compute_map` with a deterministic `tasks` list. The
 step submits every task, polls the core task/proof APIs, and stops the Workflow
 pipeline if any task fails, stalls, times out, or produces a non-accepted proof.
+
+## Composable Provider Chains
+
+`step.compute_chain` submits an ordered list of workflow-compute tasks and waits
+for each task by default. It is for workflows where one provider step produces a
+proof preview that later provider steps consume, such as S3 content fetch,
+media transform, and stream publish.
+
+Each chain entry has an explicit `id`, workload routing fields, optional
+`depends_on`, optional `wait: false`, and optional `input_mappings`. Mappings
+only copy prior step output into generic provider handoff fields:
+
+- `provider.artifact_refs`
+- `provider.content_inputs`
+- `provider.stream_inputs`
+
+The compute plugin does not fetch S3 objects, run ffmpeg, mint stream tokens,
+or implement provider SDKs. S3 behavior belongs in `workflow-plugin-aws`, media
+behavior belongs in `workflow-plugin-media`, stream transport belongs in
+`workflow-plugin-stream`, and the wfcompute runtime enforces task/proof
+authorization for forwarded refs. Secrets and credentials must remain scoped
+refs such as `secret://...`, `content://...`, `stream://...`, or
+`artifact://...`; raw AWS keys, publish tokens, and bearer credentials do not
+belong in chain config.
+
+Example:
+
+```yaml
+steps:
+  transcode_and_publish:
+    type: step.compute_chain
+    config:
+      server_url: https://compute.example.com
+      auth_token_ref: secret:WFCOMPUTE_TOKEN
+      poll_interval: 2s
+      timeout: 30m
+      require_proof: true
+      steps:
+        - id: fetch_media
+          task_id: fetch-media-1
+          org_id: gocodealone
+          pool_id: media
+          policy_id: content-fetch
+          timeout_seconds: 300
+          workload:
+            kind: provider
+            provider:
+              provider_config:
+                plugin_id: workflow-plugin-aws
+                provider_id: s3-content-source
+                contract_id: workflow-plugin-aws.s3-content-source.v1
+                version: v1.0.0
+                config_ref: config://providers/aws/media
+              operation: fetch
+              image_ref: ghcr.io/gocodealone/workflow-plugin-aws-provider@sha256:...
+              input:
+                bucket_ref: config://media/source-bucket
+                object_key: inputs/source.mp4
+
+        - id: transcode
+          task_id: transcode-1
+          org_id: gocodealone
+          pool_id: media
+          policy_id: media-transform
+          timeout_seconds: 1800
+          depends_on:
+            - fetch_media
+          input_mappings:
+            - from_step: fetch_media
+              from: result_preview.content_inputs
+              to: provider.content_inputs
+          workload:
+            kind: provider
+            provider:
+              provider_config:
+                plugin_id: workflow-plugin-media
+                provider_id: media-batch-transform
+                contract_id: workflow-plugin-media.batch-transform.v1
+                version: v1.0.0
+                config_ref: config://providers/media/ffmpeg
+              operation: batch_transform
+              image_ref: ghcr.io/gocodealone/workflow-plugin-media-provider@sha256:...
+              input:
+                outputs:
+                  - name: hls_720p
+                    preset: hls-720p
+
+        - id: publish_stream
+          task_id: publish-stream-1
+          org_id: gocodealone
+          pool_id: streamers
+          policy_id: stream-publish
+          timeout_seconds: 600
+          depends_on:
+            - transcode
+          input_mappings:
+            - from_step: transcode
+              from: result_preview.artifact_refs
+              to: provider.artifact_refs
+            - from_step: transcode
+              from: result_preview.stream_inputs
+              to: provider.stream_inputs
+          workload:
+            kind: provider
+            provider:
+              provider_config:
+                plugin_id: workflow-plugin-stream
+                provider_id: mediamtx
+                contract_id: workflow-plugin-stream.video-stream.v1
+                version: v1.0.0
+                config_ref: config://providers/stream/main
+              operation: publish
+              image_ref: ghcr.io/gocodealone/workflow-plugin-stream-provider@sha256:...
+              input:
+                rendition: 720p
+```
 
 ## Stream Workloads
 

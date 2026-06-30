@@ -1,7 +1,7 @@
 {
   "name": "workflow-plugin-compute",
   "version": "0.1.10",
-  "description": "Workflow adapter for workflow-compute dispatch, wait, map, provider, pool, setup, and provider catalog integration",
+  "description": "Workflow adapter for workflow-compute dispatch, wait, map, chain, provider, pool, setup, and provider catalog integration",
   "author": "GoCodeAlone",
   "license": "MIT",
   "type": "external",
@@ -13,7 +13,7 @@
   "capabilities": {
     "configProvider": false,
     "moduleTypes": ["compute.provider", "compute.pool", "compute.provider_catalog"],
-    "stepTypes": ["step.compute_dispatch", "step.compute_wait", "step.compute_map", "step.compute_stream"],
+    "stepTypes": ["step.compute_dispatch", "step.compute_wait", "step.compute_map", "step.compute_stream", "step.compute_chain"],
     "triggerTypes": [],
     "cliCommands": [
       {
@@ -25,7 +25,7 @@
   "dependencies": [
     {
       "name": "workflow-plugin-compute-core",
-      "constraint": ">=0.8.1"
+      "constraint": ">=0.8.3"
     },
     {
       "name": "workflow-plugin-compute-container",
