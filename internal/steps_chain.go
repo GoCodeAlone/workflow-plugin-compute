@@ -182,10 +182,10 @@ func (s *computeChainStep) Execute(ctx context.Context, _ map[string]any, _ map[
 		output["step_id"] = chainTask.ID
 		if chainTask.wait() {
 			output, err = s.waitForTask(chainCtx, client, task.ID)
+			output["step_id"] = chainTask.ID
 			if err != nil {
 				return chainErrorResult(append(outputs, output), chainTask.ID, err.Error()), nil
 			}
-			output["step_id"] = chainTask.ID
 		}
 		outputs = append(outputs, output)
 		outputsByID[chainTask.ID] = output

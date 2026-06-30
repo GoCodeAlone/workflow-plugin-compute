@@ -165,6 +165,58 @@ func TestComputeChainWaitFalseSkipsProofPolling(t *testing.T) {
 	}
 }
 
+func TestComputeChainFailureOutputKeepsStepID(t *testing.T) {
+	var submitted []protocol.Task
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/tasks":
+			var task protocol.Task
+			if err := json.NewDecoder(r.Body).Decode(&task); err != nil {
+				t.Fatalf("decode task: %v", err)
+			}
+			submitted = append(submitted, task)
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(map[string]any{"task": task})
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/tasks":
+			tasks := make([]protocol.Task, len(submitted))
+			copy(tasks, submitted)
+			for i := range tasks {
+				tasks[i].Status = protocol.TaskFailed
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"tasks": tasks})
+		default:
+			t.Fatalf("request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	cfg := chainConfigMap(srv.URL)
+	cfg["steps"] = []any{map[string]any{
+		"id":              "failing",
+		"task_id":         "failing-task",
+		"org_id":          "org-1",
+		"pool_id":         "pool-1",
+		"policy_id":       "policy-1",
+		"timeout_seconds": 60,
+		"workload":        commandWorkloadMap(),
+	}}
+	step, err := newComputeChainStep("chain", cfg)
+	if err != nil {
+		t.Fatalf("newComputeChainStep: %v", err)
+	}
+	result, err := step.Execute(context.Background(), nil, nil, nil, nil, runtimeSecrets())
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !result.StopPipeline {
+		t.Fatalf("expected stop pipeline, got %+v", result.Output)
+	}
+	steps := result.Output["steps"].([]map[string]any)
+	if len(steps) != 1 || steps[0]["step_id"] != "failing" {
+		t.Fatalf("failure output must retain step_id, got %+v", result.Output)
+	}
+}
+
 func chainConfigMap(serverURL string) map[string]any {
 	return map[string]any{
 		"server_url":     serverURL,
