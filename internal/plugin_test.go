@@ -55,7 +55,7 @@ func TestT545_PluginManifestDeclaresManagedRuntimeDependencies(t *testing.T) {
 		t.Fatalf("decode plugin.json: %v", err)
 	}
 	want := map[string]string{
-		"workflow-plugin-compute-core":      ">=0.8.1",
+		"workflow-plugin-compute-core":      ">=0.8.3",
 		"workflow-plugin-compute-container": ">=0.5.1",
 	}
 	for _, dependency := range manifest.Dependencies {
