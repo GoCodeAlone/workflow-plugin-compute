@@ -47,7 +47,7 @@ func TestStepComputeStreamSubmitsVideoStreamTask(t *testing.T) {
 	if got.Workload.Kind != coreprotocol.WorkloadVideoStream || got.Workload.VideoStream == nil {
 		t.Fatalf("workload: got %+v", got.Workload)
 	}
-	if got.Workload.VideoStream.IngestProtocols[0] != "rtmp" || !got.Workload.VideoStream.ViewerEgress.HLS {
+	if len(got.Workload.VideoStream.IngestProtocols) != 1 || got.Workload.VideoStream.IngestProtocols[0] != "rtmp" || !got.Workload.VideoStream.ViewerEgress.HLS {
 		t.Fatalf("stream spec: %+v", got.Workload.VideoStream)
 	}
 	if got.Signature.Value == "" || got.InputHash == "" {
