@@ -18,6 +18,8 @@ github.com/GoCodeAlone/workflow-compute v0.0.0-20260611013203-3a1a07f1da28 h1:aZ
 github.com/GoCodeAlone/workflow-compute v0.0.0-20260611013203-3a1a07f1da28/go.mod h1:wNbq90VefaFm2XC7GBGSm1S3ESML+JJgH4gdbO+zN64=
 github.com/GoCodeAlone/workflow-plugin-compute-core v0.6.0 h1:khmZdWjqybwuXlUHmxDIP3Ce6ce6F77QXXvV4HAox7w=
 github.com/GoCodeAlone/workflow-plugin-compute-core v0.6.0/go.mod h1:1T6uCpUWPCNk6XPYgKq5CL/7LkD24MphKYsYVzF4jnI=
+github.com/GoCodeAlone/workflow-plugin-compute-core v0.8.1 h1:K/Y1ZZbDG3yhNBThYnZ4G2vhixBEaUosLxUdJg+lwlI=
+github.com/GoCodeAlone/workflow-plugin-compute-core v0.8.1/go.mod h1:Dsw3miQN8eenpDaLzo/p0TolGtI7NyETkf9abAHZKSM=
 github.com/GoCodeAlone/yaegi v0.17.2 h1:WK6Y6e0t1a6U7r+S2dN3CGWW1PizYD3zO0zneToZPxM=
 github.com/GoCodeAlone/yaegi v0.17.2/go.mod h1:z5Pr6Wse6QJcQvpgxTxzMAevFarH0N37TG88Y9dprx0=
 github.com/IBM/sarama v1.47.0 h1:GcQFEd12+KzfPYeLgN69Fh7vLCtYRhVIx0rO4TZO318=
