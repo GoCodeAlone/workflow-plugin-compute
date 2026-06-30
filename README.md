@@ -31,6 +31,10 @@ Examples:
   `workflow-plugin-compute-core/protocol.ProviderContract`; this plugin submits
   or waits on the resulting generic workflow-compute task without embedding
   provider business logic.
+- A live-video workflow submits `step.compute_stream` to create a
+  `video-stream` task, while `workflow-plugin-stream` owns the MediaMTX provider
+  contract, runtime adapter, ingest descriptor, auth hook, and stream proof
+  manifest behavior.
 
 `compute.provider` in this repository means "Workflow connection to a
 wfcompute control plane." It is not a wfcompute worker/provider node. Provider
@@ -44,8 +48,9 @@ verification, reward, or network provider shape.
 
 Provider-specific contracts belong in the owning provider plugin. For example,
 product capture owns product URL semantics and edge compute owns edge
-lambda/CDN semantics; this plugin accepts their `ProviderContract` records
-through `compute.provider_catalog` without redefining them locally.
+lambda/CDN semantics; `workflow-plugin-stream` owns video-stream and MediaMTX
+semantics. This plugin accepts their `ProviderContract` records through
+`compute.provider_catalog` without redefining them locally.
 
 If the wfcompute control plane exposes a public client surface, it should expose
 only the scoped APIs needed by external Workflow clients, such as task submit,
@@ -121,6 +126,71 @@ effective lease policy and enforces workspace reuse or isolation.
 For fanout work, use `step.compute_map` with a deterministic `tasks` list. The
 step submits every task, polls the core task/proof APIs, and stops the Workflow
 pipeline if any task fails, stalls, times out, or produces a non-accepted proof.
+
+## Stream Workloads
+
+`step.compute_stream` submits a `workflow-plugin-compute-core` `video-stream`
+task to a wfcompute control plane. Use it when a Workflow pipeline wants
+compute scheduling, leases, proof accounting, and provider selection for a live
+stream workload.
+
+Use `workflow-plugin-stream` direct steps (`stream.start` and
+`stream.restream`) only when an application is intentionally addressing that
+plugin surface directly. Use `step.compute_stream` when the stream should be
+dispatched through workflow-compute and matched against a registered
+`video-stream` provider contract such as
+`workflow-plugin-stream.video-stream.v1`.
+
+The compute plugin does not implement MediaMTX, publish-token minting, stream
+auth hooks, ffmpeg transforms, or CDN routing. Those capabilities belong in the
+owning provider plugin or the wfcompute runtime. This step validates the
+Workflow-facing request, builds a core task with workload kind `video-stream`,
+and submits it to `/v1/tasks`.
+
+Example:
+
+```yaml
+modules:
+  compute:
+    type: compute.provider
+    config:
+      server_url: https://compute.example.com
+      auth_token_ref: secret:WFCOMPUTE_TOKEN
+      request_timeout: 30s
+
+  stream_catalog:
+    type: compute.provider_catalog
+    config:
+      contracts:
+        - ${file:./providers/workflow-plugin-stream.video-stream.v1.json}
+
+steps:
+  start_live_stream:
+    type: step.compute_stream
+    config:
+      server_url: https://compute.example.com
+      auth_token_ref: secret:WFCOMPUTE_TOKEN
+      id: stream-task-1
+      org_id: gocodealone
+      pool_id: streamers
+      policy_id: video-stream-hardened
+      timeout_seconds: 3600
+      labels:
+        workflow: live-event
+      stream:
+        ingest_protocols:
+          - rtmp
+          - srt
+          - whip
+        viewer_egress:
+          hls: true
+        destinations:
+          - target_ref: stream://destinations/archive
+            rendition: 720p
+```
+
+`target_ref` and other destination credentials should remain references. Do not
+put raw publish, restream, or CDN credentials into the Workflow config.
 
 ## Projectless Agent Setup
 
