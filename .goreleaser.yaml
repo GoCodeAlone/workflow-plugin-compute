@@ -2,8 +2,12 @@ version: 2
 
 project_name: workflow-plugin-compute
 
+env:
+  - GOTOOLCHAIN=local
+
 before:
   hooks:
+    - go run ./scripts/check-build-toolchain.go
     - go mod tidy
     - "sed -i.bak 's/\"version\": \".*\"/\"version\": \"{{ .Version }}\"/' plugin.json && rm -f plugin.json.bak"
 
@@ -11,6 +15,10 @@ builds:
   - id: workflow-plugin-compute
     main: ./cmd/workflow-plugin-compute
     binary: workflow-plugin-compute
+    hooks:
+      post:
+        - cmd: 'env GOOS= GOARCH= go run ./scripts/check-build-toolchain.go "{{ .Path }}"'
+          output: true
     env:
       - CGO_ENABLED=0
       - GOPRIVATE=github.com/GoCodeAlone/*

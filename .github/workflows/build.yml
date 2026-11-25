@@ -13,12 +13,16 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      GOTOOLCHAIN: local
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
+          go-version: '1.26.11'
           cache: true
+      - name: Verify build compiler
+        run: go run ./scripts/check-build-toolchain.go
       - name: Configure private Go modules
         env:
           RELEASES_TOKEN: ${{ secrets.RELEASES_TOKEN || github.token }}
@@ -42,6 +46,10 @@ jobs:
           token: ${{ secrets.RELEASES_TOKEN || github.token }}
           path: workflow-compute
       - name: Verify workflow-compute setup runtime surface
+        # Compute main's source checks require a different compiler from this
+        # provider's build pin. A named selection never advances with +auto.
+        env:
+          GOTOOLCHAIN: go1.27.2
         run: |
           (cd workflow-compute && GOWORK=off go run ./cmd/compute agent setup --help) 2>&1 | tee /tmp/compute-agent-setup-help.txt
           grep -q -- '-runtime' /tmp/compute-agent-setup-help.txt
@@ -50,6 +58,7 @@ jobs:
           GOWORK=off go build \
             -ldflags "-s -w -X github.com/GoCodeAlone/workflow-plugin-compute/internal.Version=$(jq -r .version plugin.json)" \
             -o workflow-plugin-compute ./cmd/workflow-plugin-compute
+          go run ./scripts/check-build-toolchain.go ./workflow-plugin-compute
           plugin_dir="$(mktemp -d)"
           trap 'rm -rf "$plugin_dir"' EXIT
           help_output="$(wfctl plugin run --plugin-dir "$plugin_dir/plugins" --ensure-installed --local . workflow-plugin-compute -- compute agent setup --help 2>&1)"
@@ -94,7 +103,7 @@ jobs:
           if command -v timeout >/dev/null 2>&1; then
             timeout_prefix=(timeout 20s)
           fi
-          compat_output="$(cd workflow-compute && "${timeout_prefix[@]}" env GOWORK=off go run ./cmd/compute \
+          compat_output="$(cd workflow-compute && "${timeout_prefix[@]}" env GOTOOLCHAIN=go1.27.2 GOWORK=off go run ./cmd/compute \
             agent setup \
             --server http://127.0.0.1:9 \
             --invite-url 'http://127.0.0.1:9/install?invite_id=ci&redeem_code=ci-redacted' \
@@ -116,8 +125,12 @@ jobs:
             exit 1
           fi
       - name: Check workflow-compute provider alignment
+        env:
+          GOTOOLCHAIN: go1.27.2
         run: scripts/check-workflow-compute-alignment.sh "$GITHUB_WORKSPACE/workflow-compute"
       - name: Validate workflow config
         run: wfctl validate --allow-no-entry-points workflow.yaml
       - name: Build with wfctl
-        run: wfctl build --config workflow.yaml --no-push --tag ci
+        run: |
+          wfctl build --config workflow.yaml --no-push --tag ci
+          go run ./scripts/check-build-toolchain.go ./workflow-plugin-compute
