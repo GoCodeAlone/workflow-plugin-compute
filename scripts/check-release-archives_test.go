@@ -681,7 +681,21 @@ func packFixture(t *testing.T, binary, manifest []byte) []byte {
 // synthetic application bytes. No compiled/archived binary is ever launched,
 // and it is not evidence that GoReleaser produced a real plugin archive.
 func TestRealArchiveProvenance(t *testing.T) {
-	root, sha, before := newSourceFixture(t)
+	root, _, _ := newSourceFixture(t)
+	// Use the actual checkout's formatted manifest. A compact synthetic JSON
+	// object hides normalization during the capture/receipt/verify crossing.
+	originalManifest, e := os.ReadFile("../plugin.json")
+	if e != nil {
+		t.Fatal(e)
+	}
+	writeFixture(t, filepath.Join(root, "plugin.json"), originalManifest)
+	fixtureGit(t, root, "add", "plugin.json")
+	fixtureGit(t, root, "commit", "-qm", "actual formatted manifest fixture")
+	sha := fixtureGit(t, root, "rev-parse", "HEAD")
+	before, e := captureSource(root, sha)
+	if e != nil {
+		t.Fatal(e)
+	}
 	owned := t.TempDir()
 	clean := filepath.Join(owned, "clean-binary")
 	fixtureTool(t, root, nil, "build", "-p=1", "-mod=readonly", "-buildvcs=true", "-o", clean, "./cmd/workflow-plugin-compute")
@@ -760,10 +774,72 @@ func TestRealArchiveProvenance(t *testing.T) {
 		t.Fatal(e)
 	}
 	writeFixture(t, filepath.Join(root, "dist/artifacts.json"), index)
+	receiptBytes, e := os.ReadFile(stateFile)
+	if e != nil {
+		t.Fatal(e)
+	}
+	var capturedReceipt sourceState
+	if e = decodeExact(receiptBytes, &capturedReceipt); e != nil {
+		t.Fatal(e)
+	}
+	t.Logf("manifest original bytes=%d sha256=%s; decoded receipt bytes=%d sha256=%s; recorded sha256=%s", len(originalManifest), checksumBytes(originalManifest), len(capturedReceipt.Manifest), checksumBytes(capturedReceipt.Manifest), capturedReceipt.Files["plugin.json"].SHA256)
 	output := fixtureTool(t, root, []string{"GO111MODULE=off"}, "run", script, "verify", sha, stateFile, filepath.Join(owned, "extracted"))
 	var report archiveReport
 	if e = decodeExact(output, &report); e != nil || len(report.Archives) != 2 || report.Commit != sha {
 		t.Fatalf("actual CLI refused synthetic producer bytes: %v", e)
+	}
+	t.Run("original-manifest-raw-byte-binding", func(t *testing.T) {
+		if !bytes.Equal(report.Source.Manifest, originalManifest) || report.Source.Files["plugin.json"].SHA256 != checksumBytes(originalManifest) {
+			t.Fatal("actual capture/verify receipt did not preserve original manifest bytes")
+		}
+	})
+	for _, tc := range []struct{ name, diagnostic string }{
+		{"receipt-bytes", "original manifest receipt mismatch"},
+		{"manifest-content", "manifest changed beyond version"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			receipt := stateFile
+			if tc.name == "receipt-bytes" {
+				b, err := os.ReadFile(stateFile)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var bad sourceState
+				if err = decodeExact(b, &bad); err != nil {
+					t.Fatal(err)
+				}
+				// Valid JSON, same meaning, different original raw bytes. The
+				// existing recorded hash must reject this receipt alteration.
+				bad.Manifest = append([]byte(" "), bad.Manifest...)
+				b, err = json.Marshal(bad)
+				if err != nil {
+					t.Fatal(err)
+				}
+				receipt = filepath.Join(owned, "altered-receipt.json")
+				writeFixture(t, receipt, b)
+			} else {
+				from := []byte(`"author": "GoCodeAlone"`)
+				if bytes.Count(manifest, from) != 1 {
+					t.Fatal("actual manifest mutation control missing")
+				}
+				writeFixture(t, filepath.Join(root, "plugin.json"), bytes.Replace(manifest, from, []byte(`"author": "inert changed author"`), 1))
+				defer writeFixture(t, filepath.Join(root, "plugin.json"), manifest)
+			}
+			extract := filepath.Join(owned, "refusal-"+tc.name)
+			cmd := exec.Command(filepath.Join(runtime.GOROOT(), "bin", "go"), "run", script, "verify", sha, receipt, extract)
+			cmd.Dir = root
+			cmd.Env = append(os.Environ(), "GO111MODULE=off", "GOTOOLCHAIN=local", "GOWORK=off", "GOENV=off", "GOPROXY=off", "GOSUMDB=off", "GOVCS=*:off", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null")
+			var stdout, stderr boundedOutput
+			cmd.Stdout, cmd.Stderr = &stdout, &stderr
+			err := cmd.Run()
+			exit, ok := err.(*exec.ExitError)
+			if !ok || exit.ExitCode() != 1 || stdout.b.Len() != 0 || stdout.overflow || stderr.overflow || !strings.Contains(stderr.b.String(), "archive qualification: "+tc.diagnostic) {
+				t.Fatalf("actual CLI did not enforce %s: %v", tc.name, err)
+			}
+			if _, err := os.Lstat(extract); !os.IsNotExist(err) {
+				t.Fatal("manifest refusal created extraction output")
+			}
+		})
 	}
 	t.Run("effective-config-binding", func(t *testing.T) {
 		var envelope map[string]json.RawMessage

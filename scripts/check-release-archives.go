@@ -347,11 +347,12 @@ type sourceFile struct {
 	SHA256 string `json:"sha256"`
 }
 type sourceState struct {
-	Root     string                `json:"root"`
-	Commit   string                `json:"commit"`
-	Tree     string                `json:"tree"`
-	Files    map[string]sourceFile `json:"files"`
-	Manifest json.RawMessage       `json:"manifest"`
+	Root   string                `json:"root"`
+	Commit string                `json:"commit"`
+	Tree   string                `json:"tree"`
+	Files  map[string]sourceFile `json:"files"`
+	// Store exact bytes: RawMessage is normalized by receipt JSON marshaling.
+	Manifest []byte `json:"manifest"`
 }
 type boundedOutput struct {
 	b        bytes.Buffer
