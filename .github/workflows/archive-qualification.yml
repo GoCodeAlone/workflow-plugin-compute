@@ -45,7 +45,7 @@ jobs:
           done
           # Update these anchors together only after reviewing the affected bytes.
           sha256sum --check --strict <<'INPUTS'
-          2cbccd32f468d46025784730858167ccd872ad0875b6e5095b090ee959331393  .goreleaser.yaml
+          ca7391c22eba7e030ad815c194da6c2ab40869a1936c8b2a2790895de3dd9baa  .goreleaser.yaml
           68afa214265e8668c77bdd63db95f60e987d7f7cd82bb3df7d82a25618d4e732  scripts/check-build-toolchain.go
           de865e63ef12058b46d3e1bba849c80213ef2219bcd827b4b8fbdd6b7d363078  go.mod
           97f7baac3309f1b0889b30516fe3dcb581c0ba099130f7904e51d11963f534c4  go.sum
@@ -105,7 +105,7 @@ jobs:
         run: |
           # Actual archives remain on the disposable runner. No upload step.
           sha256sum --check --strict <<'INPUTS'
-          2cbccd32f468d46025784730858167ccd872ad0875b6e5095b090ee959331393  .goreleaser.yaml
+          ca7391c22eba7e030ad815c194da6c2ab40869a1936c8b2a2790895de3dd9baa  .goreleaser.yaml
           68afa214265e8668c77bdd63db95f60e987d7f7cd82bb3df7d82a25618d4e732  scripts/check-build-toolchain.go
           de865e63ef12058b46d3e1bba849c80213ef2219bcd827b4b8fbdd6b7d363078  go.mod
           97f7baac3309f1b0889b30516fe3dcb581c0ba099130f7904e51d11963f534c4  go.sum
