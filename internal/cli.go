@@ -648,6 +648,9 @@ func (c *computeCLI) runSubmitContainerBuild(ctx context.Context, args []string)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	if fs.NArg() != 0 {
+		return errors.New("unexpected positional arguments for compute submit container-build")
+	}
 	if err := taskFlags.validate(); err != nil {
 		return err
 	}
