@@ -19,7 +19,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.26.11'
+          go-version: '1.27.4'
           cache: true
       - name: Verify build compiler
         run: go run ./scripts/check-build-toolchain.go
@@ -46,11 +46,10 @@ jobs:
           token: ${{ secrets.RELEASES_TOKEN || github.token }}
           path: workflow-compute
       - name: Build workflow-compute CLI for setup checks
-        # Compute main's source checks require a different compiler from this
-        # provider's build pin. A named selection never advances with +auto.
+        # Reuse the pinned job compiler for the auxiliary CLI and alignment.
+        # Runtime checks execute the built CLI with separate limits.
         working-directory: workflow-compute
         env:
-          GOTOOLCHAIN: go1.27.2
           GOWORK: "off"
         run: timeout --kill-after=5s 3m go build -o "$RUNNER_TEMP/workflow-compute-ci-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" ./cmd/compute
       - name: Verify workflow-compute setup runtime surface
@@ -133,8 +132,6 @@ jobs:
             exit 1
           fi
       - name: Check workflow-compute provider alignment
-        env:
-          GOTOOLCHAIN: go1.27.2
         run: scripts/check-workflow-compute-alignment.sh "$GITHUB_WORKSPACE/workflow-compute"
       - name: Validate workflow config
         run: wfctl validate --allow-no-entry-points workflow.yaml

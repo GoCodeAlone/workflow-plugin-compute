@@ -19,8 +19,8 @@ func TestBuildCompilerPins(t *testing.T) {
 	for _, name := range []string{"build", "release"} {
 		t.Run(name, func(t *testing.T) {
 			config := readBuildConfig(t, ".github/workflows/"+name+".yml")
-			if strings.Contains(config, "go-version-file:") || strings.Count(config, "go-version: '1.26.11'") != 1 {
-				t.Error("build compiler must be exactly Go 1.26.11 independently of the library floor")
+			if strings.Contains(config, "go-version-file:") || strings.Count(config, "go-version: '1.27.4'") != 1 {
+				t.Error("build compiler must be exactly Go 1.27.4 independently of the library floor")
 			}
 			job := config[strings.Index(config, "jobs:"):]
 			steps := strings.Index(job, "    steps:")
@@ -71,14 +71,13 @@ func TestReleaseArtifactCompilerGuards(t *testing.T) {
 func TestAuxiliaryComputeCompilerSelection(t *testing.T) {
 	config := readBuildConfig(t, ".github/workflows/build.yml")
 	const (
-		pinnedEnv = "          GOTOOLCHAIN: go1.27.2\n"
-		binary    = `"$RUNNER_TEMP/workflow-compute-ci-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"`
-		runtime   = "timeout --kill-after=5s 20s " + binary
+		binary  = `"$RUNNER_TEMP/workflow-compute-ci-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"`
+		runtime = "timeout --kill-after=5s 20s " + binary
 	)
-	// Current Compute main declares Go 1.27.2. Only its build and alignment
-	// invoke Go under that compiler; the runtime checks reuse the built CLI.
-	if strings.Contains(config, "GOTOOLCHAIN: go1.27.2+auto") || strings.Contains(config, "GOTOOLCHAIN=go1.27.2") || strings.Count(config, "GOTOOLCHAIN: go1.27.2\n") != 2 {
-		t.Error("only the auxiliary CLI build and alignment may select the exact named compiler without auto mode")
+	// Auxiliary Go commands inherit the job's pinned local compiler. Runtime
+	// checks reuse the built CLI and keep their isolated host-tool path.
+	if strings.Count(config, "GOTOOLCHAIN:") != 1 || strings.Contains(config, "GOTOOLCHAIN=") {
+		t.Error("auxiliary commands must inherit the pinned job compiler without toolchain overrides")
 	}
 	checks := []struct {
 		name string
@@ -86,7 +85,7 @@ func TestAuxiliaryComputeCompilerSelection(t *testing.T) {
 	}{
 		{"Build workflow-compute CLI for setup checks", []string{
 			"        working-directory: workflow-compute\n",
-			"        env:\n" + pinnedEnv + "          GOWORK: \"off\"\n",
+			"        env:\n          GOWORK: \"off\"\n",
 			"        run: timeout --kill-after=5s 3m go build -o " + binary + " ./cmd/compute\n",
 		}},
 		{"Verify workflow-compute setup runtime surface", []string{
@@ -97,7 +96,6 @@ func TestAuxiliaryComputeCompilerSelection(t *testing.T) {
 			`compat_output="$(timeout --kill-after=5s 20s env PATH="$plugin_dir/runtime-probe-path" ` + binary + " \\",
 		}},
 		{"Check workflow-compute provider alignment", []string{
-			"        env:\n" + pinnedEnv,
 			`        run: scripts/check-workflow-compute-alignment.sh "$GITHUB_WORKSPACE/workflow-compute"`,
 		}},
 	}

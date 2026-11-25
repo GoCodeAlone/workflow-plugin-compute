@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	buildCompiler = "go1.26.11"
+	buildCompiler = "go1.27.4"
 	pluginModule  = "github.com/GoCodeAlone/workflow-plugin-compute"
 	pluginMain    = pluginModule + "/cmd/workflow-plugin-compute"
 )
