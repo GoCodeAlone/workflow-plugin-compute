@@ -16,13 +16,16 @@ func TestCompilerSelection(t *testing.T) {
 		name, version, mode string
 		ok                  bool
 	}{
-		{"pinned", "go1.26.11", "local", true},
+		{"pinned", "go1.27.4", "local", true},
 		{"old-patch", "go1.26.3", "local", false},
-		{"other-minor", "go1.27.3", "local", false},
-		{"development", "devel go1.26.11", "local", false},
-		{"auto", "go1.26.11", "auto", false},
-		{"unset", "go1.26.11", "", false},
-		{"explicit-switch", "go1.26.11", "go1.26.11", false},
+		{"previous-patch", "go1.27.3", "local", false},
+		{"legacy-build", "go1.26.11", "local", false},
+		{"legacy-auxiliary", "go1.27.2", "local", false},
+		{"other-minor", "go1.28.0", "local", false},
+		{"development", "devel go1.27.4", "local", false},
+		{"auto", "go1.27.4", "auto", false},
+		{"unset", "go1.27.4", "", false},
+		{"explicit-switch", "go1.27.4", "go1.27.4", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if err := checkCompiler(tc.version, tc.mode); (err == nil) != tc.ok {
@@ -37,13 +40,17 @@ func TestArtifactBuildInfoPolicy(t *testing.T) {
 		name, version, path, module string
 		ok                          bool
 	}{
-		{"pinned-plugin", "go1.26.11", pluginMain, pluginModule, true},
+		{"pinned-plugin", "go1.27.4", pluginMain, pluginModule, true},
 		{"old-compiler", "go1.26.3", pluginMain, pluginModule, false},
-		{"other-compiler", "go1.27.3", pluginMain, pluginModule, false},
-		{"other-command", "go1.26.11", pluginModule + "/cmd/other", pluginModule, false},
-		{"missing-main", "go1.26.11", "", pluginModule, false},
-		{"other-module", "go1.26.11", pluginMain, "example.invalid/other", false},
-		{"missing-module", "go1.26.11", pluginMain, "", false},
+		{"previous-patch", "go1.27.3", pluginMain, pluginModule, false},
+		{"legacy-build", "go1.26.11", pluginMain, pluginModule, false},
+		{"legacy-auxiliary", "go1.27.2", pluginMain, pluginModule, false},
+		{"other-minor", "go1.28.0", pluginMain, pluginModule, false},
+		{"development", "devel go1.27.4", pluginMain, pluginModule, false},
+		{"other-command", "go1.27.4", pluginModule + "/cmd/other", pluginModule, false},
+		{"missing-main", "go1.27.4", "", pluginModule, false},
+		{"other-module", "go1.27.4", pluginMain, "example.invalid/other", false},
+		{"missing-module", "go1.27.4", pluginMain, "", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			info := &debug.BuildInfo{GoVersion: tc.version, Path: tc.path, Main: debug.Module{Path: tc.module}}
@@ -88,7 +95,7 @@ func TestCheckerOutput(t *testing.T) {
 		t.Fatal(err)
 	}
 	var got report
-	if err := json.Unmarshal(out.Bytes(), &got); err != nil || got.Compiler != "go1.26.11" || got.Artifact != nil {
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil || got.Compiler != "go1.27.4" || got.Artifact != nil {
 		t.Fatalf("unexpected compiler report: %s; %v", out.String(), err)
 	}
 	for _, args := range [][]string{{"missing-artifact"}, {"one", "two"}} {
