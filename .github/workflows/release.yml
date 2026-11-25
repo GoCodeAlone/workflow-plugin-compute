@@ -8,6 +8,8 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    env:
+      GOTOOLCHAIN: local
     timeout-minutes: 12
     steps:
       - uses: actions/checkout@v6
@@ -15,7 +17,9 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-go@v6
         with:
-          go-version-file: go.mod
+          go-version: '1.26.11'
+      - name: Verify build compiler
+        run: go run ./scripts/check-build-toolchain.go
       - name: Configure private Go modules
         env:
           RELEASES_TOKEN: ${{ secrets.RELEASES_TOKEN || github.token }}
