@@ -103,8 +103,11 @@ jobs:
             echo "::error::dry-run command recursively targets wfctl plugin run"
             exit 1
           fi
+          # This checks CLI compatibility, not availability of host container tools.
+          # Keep runtime auto, but exercise its supported no-host-tools path.
+          mkdir "$plugin_dir/runtime-probe-path"
           compat_status=0
-          compat_output="$(timeout --kill-after=5s 20s "$RUNNER_TEMP/workflow-compute-ci-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" \
+          compat_output="$(timeout --kill-after=5s 20s env PATH="$plugin_dir/runtime-probe-path" "$RUNNER_TEMP/workflow-compute-ci-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" \
             agent setup \
             --server http://127.0.0.1:9 \
             --invite-url 'http://127.0.0.1:9/install?invite_id=ci&redeem_code=ci-redacted' \

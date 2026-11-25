@@ -93,7 +93,8 @@ func TestAuxiliaryComputeCompilerSelection(t *testing.T) {
 			"help_output=\"$(" + runtime + " agent setup --help 2>&1)\"",
 		}},
 		{"Verify projectless agent setup CLI", []string{
-			"compat_output=\"$(" + runtime + " \\",
+			`mkdir "$plugin_dir/runtime-probe-path"`,
+			`compat_output="$(timeout --kill-after=5s 20s env PATH="$plugin_dir/runtime-probe-path" ` + binary + " \\",
 		}},
 		{"Check workflow-compute provider alignment", []string{
 			"        env:\n" + pinnedEnv,
