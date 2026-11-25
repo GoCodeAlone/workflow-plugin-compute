@@ -495,9 +495,45 @@ func sourceStatus(root string, after bool) error {
 		if after && (s == " M plugin.json" || strings.HasPrefix(s, "!! dist/")) {
 			continue
 		}
-		return fmt.Errorf("unexpected source/worktree change")
+		return unexpectedWorktreeChange(row, after)
 	}
 	return nil
+}
+
+// Status diagnostics disclose only fixed public contract paths. Unknown names
+// (including control characters) are fingerprinted, never copied into logs.
+// This does not change which status entries are admitted above.
+func unexpectedWorktreeChange(row []byte, after bool) error {
+	phase := "pre-build"
+	if after {
+		phase = "post-build"
+	}
+	category, xy := "malformed", "none"
+	path := row
+	if len(row) >= 3 && row[2] == ' ' {
+		xy = fmt.Sprintf("%x", row[:2])
+		path = row[3:]
+		category = map[string]string{" M": "worktree-modified", "M ": "index-modified", "MM": "index-and-worktree-modified", "??": "untracked", "!!": "ignored", "A ": "index-added", " D": "worktree-deleted", "D ": "index-deleted", "R ": "index-renamed", " R": "worktree-renamed", "C ": "index-copied", "UU": "unmerged", "AA": "unmerged", "DD": "unmerged", " T": "worktree-type-changed", "T ": "index-type-changed"}[string(row[:2])]
+		if category == "" {
+			category = "other"
+		}
+	}
+	label, class := "redacted", "other"
+	switch string(path) {
+	case "plugin.json", "go.mod", "go.sum", ".gitignore", ".goreleaser.yaml", "dist", "dist/", "bin", "bin/", archivePlugin,
+		"dist/config.yaml", "dist/metadata.json", "dist/artifacts.json", "dist/checksums.txt",
+		"scripts/check-release-archives.go", "scripts/check-release-archives_test.go", "scripts/check-build-toolchain.go", ".github/workflows/archive-qualification.yml":
+		label = string(path)
+		class = "public-contract"
+	default:
+		for _, prefix := range []string{"dist/", "bin/", "scripts/", "internal/", "docs/", ".github/"} {
+			if bytes.HasPrefix(path, []byte(prefix)) {
+				class = strings.TrimSuffix(prefix, "/") + "-child"
+				break
+			}
+		}
+	}
+	return fmt.Errorf("unexpected source/worktree change: phase=%s category=%s xy_hex=%s path=%s path_class=%s path_bytes=%d path_sha256=%s", phase, category, xy, label, class, len(path), byteHash(path))
 }
 
 func captureSource(root, sha string) (*sourceState, error) {
@@ -605,6 +641,28 @@ type verifiedArchive struct {
 	BinaryBytes int              `json:"binary_bytes"`
 	BuildInfo   *debug.BuildInfo `json:"build_info"`
 }
+
+// Receipt consumers need the validated compiler/target/source facts, not a
+// dependency catalog, replacement paths, arbitrary settings or linker values.
+// The existing compiler checker still performs its independent full inspection.
+func (a verifiedArchive) MarshalJSON() ([]byte, error) {
+	type publicArchive verifiedArchive
+	if in := a.BuildInfo; in != nil {
+		if in.GoVersion != archiveCompiler || in.Path != archiveModule+"/cmd/"+archivePlugin || in.Main.Path != archiveModule {
+			return nil, fmt.Errorf("unvalidated archive metadata cannot be reported")
+		}
+		public := &debug.BuildInfo{GoVersion: in.GoVersion, Path: in.Path, Main: debug.Module{Path: in.Main.Path}}
+		for _, s := range in.Settings {
+			switch s.Key {
+			case "GOOS", "GOARCH", "CGO_ENABLED", "vcs", "vcs.revision", "vcs.modified":
+				public.Settings = append(public.Settings, s)
+			}
+		}
+		a.BuildInfo = public
+	}
+	return json.Marshal(publicArchive(a))
+}
+
 type archiveReport struct {
 	Scope              string            `json:"scope"`
 	Compiler           string            `json:"compiler"`

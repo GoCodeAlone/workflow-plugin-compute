@@ -443,6 +443,158 @@ func TestSourceBinding(t *testing.T) {
 	}
 }
 
+func TestWorktreeDiagnostics(t *testing.T) {
+	root, sha, before := newSourceFixture(t)
+	version := "0.1.15-SNAPSHOT-" + sha[:7]
+	writeFixture(t, filepath.Join(root, "plugin.json"), []byte(strings.Replace(string(before.Manifest), "0.1.10", version, 1)))
+	writeFixture(t, filepath.Join(root, "dist/allowed"), []byte("inert ignored output"))
+	if e := sourceStatus(root, true); e != nil {
+		t.Fatal("existing allowed status changed:", e)
+	}
+	if e := sourceStatus(root, false); e == nil || !strings.Contains(e.Error(), "phase=pre-build") {
+		t.Fatal("pre-build diagnostics missing")
+	}
+	original, e := os.ReadFile(filepath.Join(root, "go.mod"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	writeFixture(t, filepath.Join(root, "go.mod"), append(append([]byte(nil), original...), []byte("// private-value-must-not-be-logged\n")...))
+	e = sourceStatus(root, true)
+	if e == nil {
+		t.Fatal("unexpected source change accepted")
+	}
+	for _, want := range []string{"phase=post-build", "category=worktree-modified", "xy_hex=204d", "path=go.mod", "path_sha256=" + checksumBytes([]byte("go.mod"))} {
+		if !strings.Contains(e.Error(), want) {
+			t.Errorf("missing bounded status field %q: %s", want, e)
+		}
+	}
+	if strings.Contains(e.Error(), "private-value-must-not-be-logged") {
+		t.Fatal("file contents logged")
+	}
+	writeFixture(t, filepath.Join(root, "go.mod"), original)
+	privatePath := "private-client-value\n::error::do-not-print"
+	writeFixture(t, filepath.Join(root, privatePath), []byte("private-content-value"))
+	e = sourceStatus(root, true)
+	if e == nil {
+		t.Fatal("unknown path accepted")
+	}
+	for _, want := range []string{"category=untracked", "xy_hex=3f3f", "path=redacted", "path_sha256=" + checksumBytes([]byte(privatePath))} {
+		if !strings.Contains(e.Error(), want) {
+			t.Errorf("missing redacted diagnostic %q: %s", want, e)
+		}
+	}
+	if len(e.Error()) > 320 || strings.ContainsAny(e.Error(), "\n\r") || strings.Contains(e.Error(), "private-client") || strings.Contains(e.Error(), "::error::") {
+		t.Fatal("unbounded/raw path diagnostics")
+	}
+}
+
+func TestArchiveReceiptPrivacy(t *testing.T) {
+	i := fixtureInfo()
+	i.Main.Version = "private-main-version"
+	i.Main.Sum = "private-main-sum"
+	i.Main.Replace = &debug.Module{Path: "private-replacement-path"}
+	i.Deps = []*debug.Module{{Path: "private-dependency-path", Version: "private-dependency-version", Sum: "private-dependency-sum"}}
+	i.Settings = append(i.Settings, debug.BuildSetting{Key: "private-setting", Value: "private-setting-value"})
+	i.Settings[6].Value += " -X unrelated.secret=private-linker-value"
+	b, e := json.Marshal(verifiedArchive{Target: "linux-amd64", BuildInfo: i})
+	if e != nil {
+		t.Fatal(e)
+	}
+	if bytes.Contains(b, []byte("private-")) || bytes.Contains(b, []byte("unrelated.secret")) || bytes.Contains(b, []byte("-ldflags")) {
+		t.Fatal("receipt emitted unnecessary private dependency/build fields")
+	}
+	var decoded verifiedArchive
+	if e = json.Unmarshal(b, &decoded); e != nil || decoded.BuildInfo == nil {
+		t.Fatal("public build facts missing")
+	}
+	if decoded.BuildInfo.GoVersion != "go1.27.4" || decoded.BuildInfo.Path != archiveModule+"/cmd/"+archivePlugin || decoded.BuildInfo.Main.Path != archiveModule {
+		t.Fatal("required public compiler/command/module facts lost")
+	}
+	want := map[string]string{"GOOS": "linux", "GOARCH": "amd64", "CGO_ENABLED": "0", "vcs": "git", "vcs.revision": strings.Repeat("a", 40), "vcs.modified": "true"}
+	for _, s := range decoded.BuildInfo.Settings {
+		if want[s.Key] != s.Value {
+			t.Fatal("unexpected public build setting")
+		}
+		delete(want, s.Key)
+	}
+	if len(want) != 0 {
+		t.Fatal("public provenance facts missing")
+	}
+}
+
+func TestMalformedWorktreeDiagnostics(t *testing.T) {
+	for _, row := range [][]byte{nil, []byte("x"), []byte("private malformed value\n::error::"), append([]byte("?? "), bytes.Repeat([]byte("private-marker"), 10000)...)} {
+		e := unexpectedWorktreeChange(row, true)
+		if e == nil || len(e.Error()) > 320 || strings.ContainsAny(e.Error(), "\n\r") || strings.Contains(e.Error(), "private-marker") || strings.Contains(e.Error(), "private malformed") {
+			t.Fatal("malformed status leaked or exceeded bound")
+		}
+	}
+}
+
+func TestWorktreeDiagnosticsEntryPoint(t *testing.T) {
+	root, sha, _ := newSourceFixture(t)
+	owned := t.TempDir()
+	state := filepath.Join(owned, "before.json")
+	script, e := filepath.Abs("check-release-archives.go")
+	if e != nil {
+		t.Fatal(e)
+	}
+	fixtureTool(t, root, []string{"GO111MODULE=off"}, "run", script, "capture", sha, state)
+	meta := releaseMetadata{Project: archivePlugin, Version: "0.1.15-SNAPSHOT-" + sha[:7], Commit: sha}
+	meta.Runtime.OS = runtime.GOOS
+	meta.Runtime.Arch = runtime.GOARCH
+	b, e := json.Marshal(meta)
+	if e != nil {
+		t.Fatal(e)
+	}
+	writeFixture(t, filepath.Join(root, "dist/metadata.json"), b)
+	mod, e := os.ReadFile(filepath.Join(root, "go.mod"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	privatePath := "unknown-private-value\n::error::do-not-log"
+	for _, tc := range []struct {
+		name, category, path string
+		change, restore      func()
+	}{
+		{"known", "worktree-modified", "go.mod", func() {
+			writeFixture(t, filepath.Join(root, "go.mod"), append(append([]byte(nil), mod...), []byte("// private-content-marker\n")...))
+		}, func() { writeFixture(t, filepath.Join(root, "go.mod"), mod) }},
+		{"redacted", "untracked", privatePath, func() { writeFixture(t, filepath.Join(root, privatePath), []byte("private-content-marker")) }, func() {
+			if e := os.Remove(filepath.Join(root, privatePath)); e != nil {
+				t.Fatal(e)
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.change()
+			defer tc.restore()
+			c := exec.Command(filepath.Join(runtime.GOROOT(), "bin", "go"), "run", script, "verify", sha, state, filepath.Join(owned, "extract-"+tc.name))
+			c.Dir = root
+			c.Env = append(os.Environ(), "GO111MODULE=off", "GOTOOLCHAIN=local", "GOWORK=off", "GOENV=off", "GOPROXY=off", "GOSUMDB=off", "GOVCS=*:off", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null")
+			var out, errout boundedOutput
+			c.Stdout = &out
+			c.Stderr = &errout
+			err := c.Run()
+			exit, ok := err.(*exec.ExitError)
+			if !ok || exit.ExitCode() != 1 || out.b.Len() != 0 || out.overflow || errout.overflow {
+				t.Fatalf("actual verifier refusal exit/stdout mismatch: %v", err)
+			}
+			for _, want := range []string{"archive qualification: unexpected source/worktree change:", "phase=post-build", "category=" + tc.category, "path_sha256=" + checksumBytes([]byte(tc.path))} {
+				if !strings.Contains(errout.b.String(), want) {
+					t.Errorf("actual entry point missing %q", want)
+				}
+			}
+			if strings.Contains(errout.b.String(), "unknown-private-value") || strings.Contains(errout.b.String(), "private-content-marker") || strings.Contains(errout.b.String(), "::error::") {
+				t.Fatal("actual stderr disclosed fixture values")
+			}
+			if _, e := os.Lstat(filepath.Join(owned, "extract-"+tc.name)); !os.IsNotExist(e) {
+				t.Fatal("source refusal created extraction output")
+			}
+		})
+	}
+}
+
 func TestCaptureRawSource(t *testing.T) {
 	root, sha, _ := newSourceFixture(t)
 	fixtureGit(t, root, "update-index", "--assume-unchanged", "internal/version.go")
