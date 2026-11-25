@@ -781,9 +781,10 @@ func verifySnapshot(root, sha string, before *sourceState, extract string) (*arc
 	seen := map[string]bool{}
 	metadataCount, checksumCount := 0, 0
 	for _, a := range artifacts {
-		// v2.16.0 emits both the enum and its human-readable type. They must
-		// describe the same record, not provide two competing classifications.
-		kind := map[string]int{"Binary": 4, "Archive": 1, "Checksum": 12, "Metadata": 35}[a.Type]
+		// The pinned v2.20.3 engine emits both the enum and its human-readable
+		// type. Metadata is 36 after WingetLocale was added; do not accept the
+		// old v2.16.0 value or conflicting classifications.
+		kind := map[string]int{"Binary": 4, "Archive": 1, "Checksum": 12, "Metadata": 36}[a.Type]
 		if kind == 0 || a.Internal != kind {
 			return nil, fmt.Errorf("artifact wire type mismatch")
 		}

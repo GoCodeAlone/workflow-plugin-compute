@@ -804,7 +804,15 @@ func TestRealArchiveProvenance(t *testing.T) {
 	effective := []byte("# Synthetic metadata fixture; no GoReleaser execution.\nversion: 2\nproject_name: workflow-plugin-compute\n")
 	writeFixture(t, filepath.Join(root, "dist/config.yaml"), effective)
 	writeFixture(t, filepath.Join(root, "dist/checksums.txt"), []byte(checksums))
-	artifacts = append(artifacts, releaseArtifact{Name: "checksums.txt", Path: "dist/checksums.txt", Type: "Checksum", Internal: 12}, releaseArtifact{Name: "metadata.json", Path: "dist/metadata.json", Type: "Metadata", Internal: 35})
+	// Official v2.20.3 artifact enum/String/JSON tags (artifact.go blob
+	// 2cd550fa9ad2fcce89822b2b4ea367af617f849b): WingetLocale shifts
+	// Metadata to 36. This literal also comes from the isolated exact-source
+	// serializer probe; it is not evidence of GoReleaser archive execution.
+	var metadataArtifact releaseArtifact
+	if e = decodeExact([]byte(`{"name":"metadata.json","path":"dist/metadata.json","internal_type":36,"type":"Metadata"}`), &metadataArtifact); e != nil {
+		t.Fatal(e)
+	}
+	artifacts = append(artifacts, releaseArtifact{Name: "checksums.txt", Path: "dist/checksums.txt", Type: "Checksum", Internal: 12}, metadataArtifact)
 	index, e := json.Marshal(artifacts)
 	if e != nil {
 		t.Fatal(e)
@@ -823,6 +831,51 @@ func TestRealArchiveProvenance(t *testing.T) {
 	var report archiveReport
 	if e = decodeExact(output, &report); e != nil || len(report.Archives) != 2 || report.Commit != sha {
 		t.Fatalf("actual CLI refused synthetic producer bytes: %v", e)
+	}
+	for _, tc := range []struct {
+		name, diagnostic string
+		mutate           func(map[string]any)
+	}{
+		{"metadata-v2.16.0-code", "artifact wire type mismatch", func(m map[string]any) { m["internal_type"] = 35 }},
+		{"metadata-other-enum", "artifact wire type mismatch", func(m map[string]any) { m["internal_type"] = 37 }},
+		{"metadata-missing-code", "artifact wire type mismatch", func(m map[string]any) { delete(m, "internal_type") }},
+		{"metadata-zero-code", "artifact wire type mismatch", func(m map[string]any) { m["internal_type"] = 0 }},
+		{"metadata-conflicting-label", "artifact wire type mismatch", func(m map[string]any) { m["type"] = "Binary" }},
+		{"metadata-conflicting-code", "artifact wire type mismatch", func(m map[string]any) { m["internal_type"] = 4 }},
+		{"metadata-string-code", "cannot unmarshal string", func(m map[string]any) { m["internal_type"] = "36" }},
+		{"metadata-unknown-field", "unknown field", func(m map[string]any) { m["unrecognized_wire_field"] = true }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var bad []map[string]any
+			if e := json.Unmarshal(index, &bad); e != nil {
+				t.Fatal(e)
+			}
+			m := bad[len(bad)-1]
+			if m["name"] != "metadata.json" || m["internal_type"] != float64(36) || m["type"] != "Metadata" {
+				t.Fatal("official metadata mutation input changed")
+			}
+			tc.mutate(m)
+			b, e := json.Marshal(bad)
+			if e != nil {
+				t.Fatal(e)
+			}
+			writeFixture(t, filepath.Join(root, "dist/artifacts.json"), b)
+			defer writeFixture(t, filepath.Join(root, "dist/artifacts.json"), index)
+			extract := filepath.Join(owned, "refusal-"+tc.name)
+			cmd := exec.Command(filepath.Join(runtime.GOROOT(), "bin", "go"), "run", script, "verify", sha, stateFile, extract)
+			cmd.Dir = root
+			cmd.Env = append(os.Environ(), "GO111MODULE=off", "GOTOOLCHAIN=local", "GOWORK=off", "GOENV=off", "GOPROXY=off", "GOSUMDB=off", "GOVCS=*:off", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null")
+			var stdout, stderr boundedOutput
+			cmd.Stdout, cmd.Stderr = &stdout, &stderr
+			err := cmd.Run()
+			exit, ok := err.(*exec.ExitError)
+			if !ok || exit.ExitCode() != 1 || stdout.b.Len() != 0 || stdout.overflow || stderr.overflow || !strings.Contains(stderr.b.String(), tc.diagnostic) {
+				t.Fatalf("actual CLI did not enforce wire refusal %s: %v", tc.name, err)
+			}
+			if _, e := os.Lstat(extract); !os.IsNotExist(e) {
+				t.Fatal("wire refusal created extraction output")
+			}
+		})
 	}
 	t.Run("original-manifest-raw-byte-binding", func(t *testing.T) {
 		if !bytes.Equal(report.Source.Manifest, originalManifest) || report.Source.Files["plugin.json"].SHA256 != checksumBytes(originalManifest) {

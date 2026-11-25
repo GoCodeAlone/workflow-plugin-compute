@@ -49,8 +49,8 @@ jobs:
           68afa214265e8668c77bdd63db95f60e987d7f7cd82bb3df7d82a25618d4e732  scripts/check-build-toolchain.go
           de865e63ef12058b46d3e1bba849c80213ef2219bcd827b4b8fbdd6b7d363078  go.mod
           97f7baac3309f1b0889b30516fe3dcb581c0ba099130f7904e51d11963f534c4  go.sum
-          fdce18cb82d409b7b3f70a0ed8fb8e28124fb3ee17f5783321249d6fbbad5609  scripts/check-release-archives.go
-          f725dfd8abea97fd54d066eb4dcccd9a0c635bcc0e6285e28aab5f463872f33f  scripts/check-release-archives_test.go
+          c33b50d1a150abdae97a710ec8d4607528e00e87a164214945b16af29afab00a  scripts/check-release-archives.go
+          3aedb5a4b7a0723210a8dd33c4cead8fe6d0215c520aa215033df1d5b5b3149e  scripts/check-release-archives_test.go
           INPUTS
           test "$(go version)" = 'go version go1.27.4 linux/amd64'
           ENGINE_BIN="$(command -v goreleaser)"
@@ -118,8 +118,8 @@ jobs:
           68afa214265e8668c77bdd63db95f60e987d7f7cd82bb3df7d82a25618d4e732  scripts/check-build-toolchain.go
           de865e63ef12058b46d3e1bba849c80213ef2219bcd827b4b8fbdd6b7d363078  go.mod
           97f7baac3309f1b0889b30516fe3dcb581c0ba099130f7904e51d11963f534c4  go.sum
-          fdce18cb82d409b7b3f70a0ed8fb8e28124fb3ee17f5783321249d6fbbad5609  scripts/check-release-archives.go
-          f725dfd8abea97fd54d066eb4dcccd9a0c635bcc0e6285e28aab5f463872f33f  scripts/check-release-archives_test.go
+          c33b50d1a150abdae97a710ec8d4607528e00e87a164214945b16af29afab00a  scripts/check-release-archives.go
+          3aedb5a4b7a0723210a8dd33c4cead8fe6d0215c520aa215033df1d5b5b3149e  scripts/check-release-archives_test.go
           INPUTS
           home="$(mktemp -d "$OWNED_ROOT/package-home.XXXXXXXX")"
           tmp="$(mktemp -d "$OWNED_ROOT/package-tmp.XXXXXXXX")"
