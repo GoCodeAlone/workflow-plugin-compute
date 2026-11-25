@@ -35,13 +35,39 @@ jobs:
           chmod +x "${RUNNER_TEMP}/wfctl-bin/wfctl"
       - name: Validate plugin contract for publish (pre-build)
         run: "${{ runner.temp }}/wfctl-bin/wfctl plugin validate-contract --for-publish --tag ${{ github.ref_name }} ."
-      - uses: goreleaser/goreleaser-action@v7
+      - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7
         with:
           distribution: goreleaser
-          version: '~> v2'
-          args: release --clean
+          version: v2.20.3
+          install-only: true
+      - name: Publish with verified GoReleaser
+        shell: bash --noprofile --norc -euo pipefail {0}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ENGINE_BIN="$(command -v goreleaser)"
+          verify_engine() {
+            case "$ENGINE_BIN" in /*) ;; *) return 1 ;; esac
+            test -f "$ENGINE_BIN" && test ! -L "$ENGINE_BIN" || return 1
+            printf '%s  %s\n' 'd124b61b79baf6d7e2727bb018e7115c045c076df82c13795bb19f9ace4b612d' "$ENGINE_BIN" | shasum -a 256 --check --strict
+          }
+          verify_engine
+          "$ENGINE_BIN" release --clean
+          # Preserve successful artifact/metadata log groups. Previous unnamed
+          # action outputs had no consumers.
+          for kind in artifacts metadata; do
+            metadata="dist/$kind.json"
+            if [ -s "$metadata" ]; then
+              content="$(cat "$metadata")"
+              if [ "$content" != null ]; then
+                label='Metadata output'
+                if [ "$kind" = artifacts ]; then label='Artifacts output'; fi
+                printf '::group::%s\n' "$label"
+                printf '%s\n' "$content"
+                echo '::endgroup::'
+              fi
+            fi
+          done
       # workflow#765: runtime truth-check via plugin verify-capabilities.
       - name: Verify capabilities (runtime truth-check)
         if: >-

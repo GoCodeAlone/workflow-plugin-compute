@@ -30,13 +30,14 @@ func workflowContract(b string) bool {
 		"actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803",
 		"actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16",
 		"goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de",
-		"version: v2.16.0", "install-only: true", "GOTOOLCHAIN: local",
+		"version: v2.20.3", "install-only: true", "GOTOOLCHAIN: local",
+		"v?2[.]20[.]3",
 		"check --config=.goreleaser.yaml", "release --config=.goreleaser.yaml --snapshot --clean",
 		"--skip=publish,sign,notarize,sbom,docker,ko --parallelism=1 --timeout=10m",
 		"GOPROXY=off", "GOVCS='*:off'", "GOSUMDB=off", "env -i",
 		"check-release-archives.go capture", "check-release-archives.go verify",
 		"extracted/linux-amd64/workflow-plugin-compute", "extracted/darwin-arm64/workflow-plugin-compute",
-		"upcoming gate", "floating", "~> v2",
+		"authenticated engine bytes", "tag-mode qualification",
 	} {
 		if !strings.Contains(b, required) {
 			return false
@@ -74,6 +75,39 @@ func TestArchiveWorkflow(t *testing.T) {
 	}
 }
 
+func TestArchiveReleaseEngineParity(t *testing.T) {
+	for _, name := range []string{"archive-qualification.yml", "release.yml"} {
+		b, err := os.ReadFile("../.github/workflows/" + name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, required := range []string{
+			"goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de",
+			"version: v2.20.3",
+			"d124b61b79baf6d7e2727bb018e7115c045c076df82c13795bb19f9ace4b612d",
+			"shasum -a 256 --check --strict",
+			"test -f \"$ENGINE_BIN\" && test ! -L \"$ENGINE_BIN\"",
+		} {
+			count := 1
+			if name == "archive-qualification.yml" && (strings.HasPrefix(required, "d124") || strings.Contains(required, "shasum") || strings.HasPrefix(required, "test -f")) {
+				count = 2 // pre-credential binding and pre-execution recheck
+			}
+			if strings.Count(string(b), required) != count {
+				t.Errorf("%s must pin the shared engine contract: %s", name, required)
+			}
+		}
+		if name == "archive-qualification.yml" {
+			for _, required := range []string{"verify_engine\n          \"$ENGINE_BIN\" --version", "clean \"$ENGINE_BIN\" \"$@\"", "checked_engine check --config", "checked_engine release --config", "ENGINE_BIN: ${{ steps.scratch.outputs.engine_bin }}"} {
+				if !strings.Contains(string(b), required) {
+					t.Errorf("archive engine binding missing: %s", required)
+				}
+			}
+		} else if strings.Contains(string(b), "args: release --clean") || !strings.Contains(string(b), "verify_engine\n          \"$ENGINE_BIN\" release --clean") || !strings.Contains(string(b), "install-only: true") {
+			t.Error("release must install without execution, then verify and use the same absolute engine")
+		}
+	}
+}
+
 func TestArchiveWorkflowRefusals(t *testing.T) {
 	b, err := os.ReadFile("../.github/workflows/archive-qualification.yml")
 	if err != nil {
@@ -84,6 +118,8 @@ func TestArchiveWorkflowRefusals(t *testing.T) {
 		{"implicit-config", "check --config=.goreleaser.yaml", "check"},
 		{"publish", "--skip=publish,sign", "--skip=sign"},
 		{"old-compiler", "go-version: '1.27.4'", "go-version: '1.26.11'"},
+		{"old-engine", "version: v2.20.3", "version: v2.16.0"},
+		{"old-engine-guard", "v?2[.]20[.]3", "v?2[.]16[.]0"},
 		{"mutable-action", "actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16", "actions/setup-go@v6"},
 		{"code-during-acquisition", "mod tidy -diff", "run ./script.go"},
 		{"unrestricted-vcs", "GOVCS='*:off'", "GOVCS='*:all'"},
