@@ -34,8 +34,8 @@ func TestBuildCompilerPins(t *testing.T) {
 		})
 	}
 	mod := readBuildConfig(t, "go.mod")
-	if !strings.Contains(mod, "\ngo 1.26.3\n") || strings.Contains(mod, "\ntoolchain ") {
-		t.Error("library minimum must remain unchanged without automatic toolchain selection")
+	if !strings.Contains(mod, "\ngo 1.26.4\n") || strings.Contains(mod, "\ntoolchain ") {
+		t.Error("library minimum must be Go 1.26.4 without automatic toolchain selection")
 	}
 }
 
