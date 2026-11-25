@@ -70,27 +70,54 @@ func TestReleaseArtifactCompilerGuards(t *testing.T) {
 
 func TestAuxiliaryComputeCompilerSelection(t *testing.T) {
 	config := readBuildConfig(t, ".github/workflows/build.yml")
-	if strings.Contains(config, "GOTOOLCHAIN: go1.27.2+auto") || strings.Contains(config, "GOTOOLCHAIN=go1.27.2+auto") || strings.Count(config, "GOTOOLCHAIN: go1.27.2\n") != 2 || strings.Count(config, "GOTOOLCHAIN=go1.27.2 ") != 1 {
-		t.Error("named auxiliary compiler must be limited to the three existing Compute checks without auto mode")
+	const (
+		pinnedEnv = "          GOTOOLCHAIN: go1.27.2\n"
+		binary    = `"$RUNNER_TEMP/workflow-compute-ci-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"`
+		runtime   = "timeout --kill-after=5s 20s " + binary
+	)
+	// Current Compute main declares Go 1.27.2. Only its build and alignment
+	// invoke Go under that compiler; the runtime checks reuse the built CLI.
+	if strings.Contains(config, "GOTOOLCHAIN: go1.27.2+auto") || strings.Contains(config, "GOTOOLCHAIN=go1.27.2") || strings.Count(config, "GOTOOLCHAIN: go1.27.2\n") != 2 {
+		t.Error("only the auxiliary CLI build and alignment may select the exact named compiler without auto mode")
 	}
-	// Current Compute main declares Go 1.27.2. Its source-alignment checks are
-	// separate from the released provider's lower library floor/compiler pin.
-	for _, name := range []string{"Verify workflow-compute setup runtime surface", "Check workflow-compute provider alignment"} {
-		t.Run(name, func(t *testing.T) {
-			start := strings.Index(config, "      - name: "+name+"\n")
-			if start < 0 {
-				t.Fatal("existing auxiliary check missing")
+	checks := []struct {
+		name string
+		want []string
+	}{
+		{"Build workflow-compute CLI for setup checks", []string{
+			"        working-directory: workflow-compute\n",
+			"        env:\n" + pinnedEnv + "          GOWORK: \"off\"\n",
+			"        run: timeout --kill-after=5s 3m go build -o " + binary + " ./cmd/compute\n",
+		}},
+		{"Verify workflow-compute setup runtime surface", []string{
+			"help_output=\"$(" + runtime + " agent setup --help 2>&1)\"",
+		}},
+		{"Verify projectless agent setup CLI", []string{
+			`mkdir "$plugin_dir/runtime-probe-path"`,
+			`compat_output="$(timeout --kill-after=5s 20s env PATH="$plugin_dir/runtime-probe-path" ` + binary + " \\",
+		}},
+		{"Check workflow-compute provider alignment", []string{
+			"        env:\n" + pinnedEnv,
+			`        run: scripts/check-workflow-compute-alignment.sh "$GITHUB_WORKSPACE/workflow-compute"`,
+		}},
+	}
+	previous := -1
+	for _, check := range checks {
+		start := strings.Index(config, "      - name: "+check.name+"\n")
+		if start <= previous {
+			t.Fatalf("missing or out-of-order auxiliary check: %s", check.name)
+		}
+		previous = start
+		t.Run(check.name, func(t *testing.T) {
+			step := config[start:]
+			if next := strings.Index(step[1:], "\n      - "); next >= 0 {
+				step = step[:next+2]
 			}
-			step := config[start+1:]
-			if next := strings.Index(step, "\n      - "); next >= 0 {
-				step = step[:next]
-			}
-			if !strings.Contains(step, "        env:\n          GOTOOLCHAIN: go1.27.2\n") {
-				t.Error("auxiliary Compute check must select its own exact named compiler without auto mode")
+			for _, want := range check.want {
+				if !strings.Contains(step, want) {
+					t.Errorf("auxiliary check must contain %q", want)
+				}
 			}
 		})
-	}
-	if !strings.Contains(config, "compat_output=\"$(cd workflow-compute && \"${timeout_prefix[@]}\" env GOTOOLCHAIN=go1.27.2 GOWORK=off go run ./cmd/compute") {
-		t.Error("compatibility probe must select the auxiliary compiler only at its go invocation")
 	}
 }
