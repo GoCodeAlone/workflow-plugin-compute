@@ -15,6 +15,7 @@ import (
 	"reflect"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -37,7 +38,19 @@ func nativeFixture(t *testing.T) (string, []string, nativeCheckOptions) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	opt := nativeCheckOptions{host: "linux/amd64", tool: tool, digest: digest, cleanup: os.RemoveAll, run: func(*exec.Cmd) error { t.Fatal("unexpected process invocation"); return nil }}
+	opt := nativeCheckOptions{host: "linux/amd64", tool: tool, digest: digest, afterCleanup: os.RemoveAll, run: func(*exec.Cmd) error { t.Fatal("unexpected process invocation"); return nil }}
+	opt.workspace = func() (*nativeWorkspace, error) {
+		w, e := newNativeWorkspace()
+		if e == nil {
+			t.Logf("OWNED_NATIVE_TMP:%s", w.path)
+			t.Cleanup(func() {
+				if _, e := os.Lstat(w.path); !os.IsNotExist(e) {
+					t.Error("owned native workspace leaked after command return")
+				}
+			})
+		}
+		return w, e
+	}
 	// v2.20.3 base.OptionsForTarget uses filepath.Abs for the actual hook .Path.
 	return root, []string{"linux", "amd64", filepath.Join(root, "dist/plugin"), "false"}, opt
 }
@@ -69,7 +82,7 @@ func nativeEnvironment(t *testing.T, cmd *exec.Cmd, root string) string {
 		}
 	}
 	owned := filepath.Dir(values["HOME"])
-	if filepath.Dir(values["TMPDIR"]) != owned || owned == root {
+	if values["TMPDIR"] != owned || owned == root {
 		t.Fatal("child environment ownership changed")
 	}
 	return owned
@@ -142,7 +155,7 @@ func TestNativeReleaseReceipt(t *testing.T) {
 				}
 				return nil
 			}
-			opt.cleanup = func(path string) error {
+			opt.afterCleanup = func(path string) error {
 				cleaned = true
 				if e := os.RemoveAll(path); e != nil {
 					return e
@@ -301,7 +314,7 @@ func TestNativeReleaseMutationAndFailure(t *testing.T) {
 				return os.WriteFile(filepath.Join(root, p), []byte("inert changed bytes"), 0700)
 			}
 			if name == "primary-and-cleanup" || name == "cleanup-after-success" {
-				opt.cleanup = func(p string) error {
+				opt.afterCleanup = func(p string) error {
 					if e := os.RemoveAll(p); e != nil {
 						return e
 					}
@@ -449,7 +462,7 @@ func TestNativeFailureDiagnostics(t *testing.T) {
 				if name == "verifier-and-cleanup" {
 					cleanup = "failed"
 				}
-				opt.cleanup = func(p string) error {
+				opt.afterCleanup = func(p string) error {
 					if e := os.RemoveAll(p); e != nil {
 						return e
 					}
@@ -656,7 +669,7 @@ func TestNativeReportedReasonActualFunction(t *testing.T) {
 	if e := json.Unmarshal(b, &d); e != nil {
 		t.Fatal(e)
 	}
-	if d["reason_hint"] != "reported-unix-socket-path-length" || d["socket_path_bytes"] != d["tmpdir_bytes"].(float64)+9 {
+	if d["reason_hint"] != "reported-plugin-handshake" || d["socket_path_bytes"] != nil || d["tmpdir_bytes"].(float64)+17 > 107 {
 		t.Fatal("real function did not classify finite synthetic helper output")
 	}
 	t.Logf("NATIVE_REPORTED_REASON_FIXTURE:%s", b)
@@ -674,5 +687,277 @@ func TestNativeReportedCaptureBound(t *testing.T) {
 	}
 	if hint, size := classifyNativeReportedError(w.String(), "/inert", w.overflow); hint != "unclassified" || size != nil {
 		t.Fatal("truncated capture was classified")
+	}
+}
+
+// Real entry function, synthetic verifier callback, owned regular directories.
+// The deliberately long ambient TMPDIR must not become the socket namespace.
+func TestNativeShortTempEntry(t *testing.T) {
+	ambient := filepath.Join(t.TempDir(), strings.Repeat("a", 120))
+	if e := os.Mkdir(ambient, 0700); e != nil {
+		t.Fatal(e)
+	}
+	t.Setenv("TMPDIR", ambient)
+	root, args, opt := nativeFixture(t)
+	var socketDir string
+	calls := 0
+	opt.run = func(c *exec.Cmd) error {
+		calls++
+		nativeEnvironment(t, c, root)
+		values := map[string]string{}
+		for _, v := range c.Env {
+			k, v, _ := strings.Cut(v, "=")
+			values[k] = v
+		}
+		socketDir = values["TMPDIR"]
+		if len(socketDir)+len("/plugin")+10 > 107 {
+			t.Error("native entry exceeded worst-case Linux socket byte budget")
+		}
+		if filepath.Dir(values["HOME"]) != socketDir {
+			t.Error("native entry did not use its single private root directly for socket temp")
+		}
+		if strings.HasPrefix(socketDir, ambient) {
+			t.Error("native socket namespace inherited long ambient temp path")
+		}
+		return nil
+	}
+	if _, e := checkNativeRelease(root, args, opt); e != nil || calls != 1 {
+		t.Fatalf("synthetic native entry failed: %v", e)
+	}
+	if socketDir != "" {
+		if _, e := os.Lstat(socketDir); !os.IsNotExist(e) {
+			t.Fatal("owned socket directory survived joined return")
+		}
+	}
+}
+
+func nativeOwnedTestParent(t *testing.T) string {
+	t.Helper()
+	p, e := os.MkdirTemp("/tmp", "nt-")
+	if e != nil {
+		t.Fatal("cannot create owned native test parent")
+	}
+	p, e = filepath.EvalSymlinks(p)
+	if e != nil {
+		t.Fatal(e)
+	}
+	identity, e := os.Lstat(p)
+	if e != nil {
+		t.Fatal(e)
+	}
+	t.Logf("OWNED_NATIVE_PARENT:%s", p)
+	t.Cleanup(func() {
+		current, e := os.Lstat(p)
+		if e != nil || !os.SameFile(identity, current) {
+			t.Error("native test parent identity changed; teardown refused")
+			return
+		}
+		if e := os.RemoveAll(p); e != nil {
+			t.Error("owned native test parent teardown failed")
+			return
+		}
+		if _, e := os.Lstat(p); !os.IsNotExist(e) {
+			t.Error("owned native test parent survived teardown")
+		}
+	})
+	return p
+}
+
+type nativeSyntheticInfo struct {
+	os.FileInfo
+	mode os.FileMode
+	uid  uint32
+}
+
+func (i nativeSyntheticInfo) Mode() os.FileMode { return i.mode }
+func (i nativeSyntheticInfo) IsDir() bool       { return i.mode.IsDir() }
+func (i nativeSyntheticInfo) Sys() any          { return &syscall.Stat_t{Uid: i.uid} }
+
+func TestNativeWorkspaceBudgetAndParentPolicy(t *testing.T) {
+	name := "nc-" + strings.Repeat("A", 22)
+	for _, tc := range []struct {
+		name, parent string
+		ok           bool
+	}{
+		{"parent64", "/" + strings.Repeat("p", 63), true},
+		{"parent65", "/" + strings.Repeat("p", 64), false},
+		{"byte-not-rune-budget", "/" + strings.Repeat("p", 62) + "é", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path, e := nativeWorkspacePath(tc.parent, name)
+			if (e == nil) != tc.ok {
+				t.Fatal("native raw-byte path budget mismatch")
+			}
+			if e == nil && len(path)+17 > 107 {
+				t.Fatal("admitted path exceeded budget")
+			}
+		})
+	}
+	if _, e := nativeWorkspacePath("/tmp", "../inert"); e == nil {
+		t.Fatal("native child traversal accepted")
+	}
+	info, e := os.Stat(t.TempDir())
+	if e != nil {
+		t.Fatal(e)
+	}
+	for _, tc := range []struct {
+		name string
+		uid  uint32
+		mode os.FileMode
+		ok   bool
+	}{
+		{"private-actor", 12345, os.ModeDir | 0700, true},
+		{"root-sticky", 0, os.ModeDir | os.ModeSticky | 0777, true},
+		{"root-read-only-to-others", 0, os.ModeDir | 0755, true},
+		{"root-unsafe", 0, os.ModeDir | 0777, false},
+		{"foreign-owner", 23456, os.ModeDir | 0700, false},
+		{"actor-public", 12345, os.ModeDir | 0777, false},
+		{"not-directory", 12345, 0700, false},
+		{"redirected", 12345, os.ModeDir | os.ModeSymlink | 0700, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := nativeTempParent(nativeSyntheticInfo{info, tc.mode, tc.uid}, 12345)
+			if (e == nil) != tc.ok {
+				t.Fatal("native temp parent ownership/isolation policy mismatch")
+			}
+		})
+	}
+}
+
+type nativeEntropyFailure struct{ err error }
+
+func (r nativeEntropyFailure) Read([]byte) (int, error) { return 0, r.err }
+
+func TestNativeWorkspaceAllocationAndCleanup(t *testing.T) {
+	parent := nativeOwnedTestParent(t)
+	if e := os.WriteFile(filepath.Join(parent, "sibling"), []byte("preserve public fixture"), 0600); e != nil {
+		t.Fatal(e)
+	}
+	w, e := newNativeWorkspaceAt(parent, bytes.NewReader(make([]byte, 16)))
+	if e != nil {
+		t.Fatal("owned workspace creation failed")
+	}
+	t.Logf("OWNED_NATIVE_TMP:%s", w.path)
+	info, e := os.Lstat(w.path)
+	if e != nil || !os.SameFile(w.identity, info) || nativePrivateDirectory(info, os.Geteuid()) != nil {
+		t.Fatal("native directory is not identity-bound/private")
+	}
+	if len(w.path)+17 > 107 || filepath.Dir(w.path) != parent {
+		t.Fatal("native directory violated containment/budget")
+	}
+	if e = w.parent.WriteFile(w.name+"/owned", []byte("inert owned child"), 0600); e != nil {
+		t.Fatal(e)
+	}
+	if e = w.cleanup(); e != nil {
+		t.Fatal("mandatory identity-bound cleanup failed")
+	}
+	if _, e = os.Lstat(w.path); !os.IsNotExist(e) {
+		t.Fatal("native directory survived cleanup")
+	}
+	b, e := os.ReadFile(filepath.Join(parent, "sibling"))
+	if e != nil || string(b) != "preserve public fixture" {
+		t.Fatal("cleanup touched unowned sibling")
+	}
+	if _, e = w.parent.Lstat("."); e == nil {
+		t.Fatal("parent capability was not closed")
+	}
+	if e = w.cleanup(); e != nil {
+		t.Fatal("completed cleanup was not idempotent")
+	}
+}
+
+func TestNativeWorkspaceEntropyAndCollisionRefusals(t *testing.T) {
+	t.Run("entropy", func(t *testing.T) {
+		parent := nativeOwnedTestParent(t)
+		sentinel := errors.New("inert entropy failure")
+		w, e := newNativeWorkspaceAt(parent, nativeEntropyFailure{sentinel})
+		if w != nil || !errors.Is(e, sentinel) {
+			t.Fatal("entropy failure did not fail closed with identity")
+		}
+		entries, e := os.ReadDir(parent)
+		if e != nil || len(entries) != 0 {
+			t.Fatal("entropy failure created output")
+		}
+	})
+	t.Run("collisions", func(t *testing.T) {
+		parent := nativeOwnedTestParent(t)
+		name := "nc-" + strings.Repeat("A", 22)
+		path := filepath.Join(parent, name)
+		if e := os.Mkdir(path, 0700); e != nil {
+			t.Fatal(e)
+		}
+		if e := os.WriteFile(filepath.Join(path, "keep"), []byte("preserve"), 0600); e != nil {
+			t.Fatal(e)
+		}
+		before, e := os.Lstat(path)
+		if e != nil {
+			t.Fatal(e)
+		}
+		w, e := newNativeWorkspaceAt(parent, bytes.NewReader(make([]byte, 16*8)))
+		if w != nil || e == nil || !strings.Contains(e.Error(), "collision budget") {
+			t.Fatal("collision budget did not refuse")
+		}
+		after, e := os.Lstat(path)
+		b, readErr := os.ReadFile(filepath.Join(path, "keep"))
+		if e != nil || readErr != nil || !os.SameFile(before, after) || string(b) != "preserve" {
+			t.Fatal("collision removed/modified preexisting fixture")
+		}
+	})
+}
+
+func TestNativeWorkspaceIdentityMismatchRefusal(t *testing.T) {
+	parent := nativeOwnedTestParent(t)
+	w, e := newNativeWorkspaceAt(parent, bytes.NewReader(make([]byte, 16)))
+	if e != nil {
+		t.Fatal(e)
+	}
+	if e = w.parent.Rename(w.name, w.name+"-retained"); e != nil {
+		t.Fatal(e)
+	}
+	if e = w.parent.Mkdir(w.name, 0700); e != nil {
+		t.Fatal(e)
+	}
+	if e = w.parent.WriteFile(w.name+"/keep", []byte("replacement fixture"), 0600); e != nil {
+		t.Fatal(e)
+	}
+	if e = w.cleanup(); e == nil {
+		t.Fatal("changed native identity was removed")
+	}
+	b, e := os.ReadFile(filepath.Join(w.path, "keep"))
+	if e != nil || string(b) != "replacement fixture" {
+		t.Fatal("cleanup touched replacement fixture")
+	}
+	retained, e := os.Lstat(filepath.Join(parent, w.name+"-retained"))
+	if e != nil || !os.SameFile(retained, w.identity) {
+		t.Fatal("original retained identity changed")
+	}
+	if _, e = w.parent.Lstat("."); e == nil {
+		t.Fatal("refusal leaked parent capability")
+	}
+}
+
+func TestNativeWorkspacePartialInitializationCleanup(t *testing.T) {
+	root, args, opt := nativeFixture(t)
+	factory := opt.workspace
+	var owned string
+	opt.workspace = func() (*nativeWorkspace, error) {
+		w, e := factory()
+		if e != nil {
+			return w, e
+		}
+		owned = w.path
+		if e := w.parent.Mkdir(w.name+"/h", 0700); e != nil {
+			t.Fatal(e)
+		}
+		return w, nil
+	}
+	calls := 0
+	opt.run = func(*exec.Cmd) error { calls++; return nil }
+	_, e := checkNativeRelease(root, args, opt)
+	if !errors.Is(e, os.ErrExist) || calls != 0 {
+		t.Fatal("partial initialization failed to stop before verifier")
+	}
+	if _, e := os.Lstat(owned); !os.IsNotExist(e) {
+		t.Fatal("partial initialization left owned directory")
 	}
 }

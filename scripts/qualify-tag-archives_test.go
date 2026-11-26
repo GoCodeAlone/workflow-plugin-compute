@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
@@ -321,6 +322,7 @@ func TestTagNativeDiagnosticProducerCrossing(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
+	recordNestedNativeWorkspaces(t, b)
 	var wire string
 	for _, line := range strings.Split(string(b), "\n") {
 		if _, v, ok := strings.Cut(line, "NATIVE_DIAGNOSTIC_FIXTURE:"); ok {
@@ -417,6 +419,7 @@ func TestTagReportedReasonProducerCrossing(t *testing.T) {
 	if e != nil {
 		t.Fatal("finite actual producer fixture failed")
 	}
+	recordNestedNativeWorkspaces(t, b)
 	var wire string
 	for _, line := range strings.Split(string(b), "\n") {
 		if _, v, ok := strings.Cut(line, "NATIVE_REPORTED_REASON_FIXTURE:"); ok {
@@ -438,7 +441,29 @@ func TestTagReportedReasonProducerCrossing(t *testing.T) {
 		t.Fatal(e)
 	}
 	_, e = runTagChild(t.TempDir(), []string{"PATH=/usr/bin:/bin", "NATIVE_CHECK_RECEIPT=" + receipt}, []string{"/bin/sh", "-c", "exit 1"})
-	if e == nil || !strings.Contains(e.Error(), `"observation":"refused"`) || !strings.Contains(e.Error(), `"reason_hint":"reported-unix-socket-path-length"`) {
+	if e == nil || !strings.Contains(e.Error(), `"observation":"refused"`) || !strings.Contains(e.Error(), `"reason_hint":"reported-plugin-handshake"`) {
 		t.Fatal("actual reported-text wire did not cross strict consumer")
+	}
+}
+
+func recordNestedNativeWorkspaces(t *testing.T, b []byte) {
+	t.Helper()
+	parent, e := filepath.EvalSymlinks("/tmp")
+	if e != nil {
+		t.Fatal("cannot resolve native workspace ledger parent")
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		_, path, ok := strings.Cut(line, "OWNED_NATIVE_TMP:")
+		if !ok {
+			continue
+		}
+		path = strings.TrimSpace(path)
+		if filepath.Dir(path) != parent || !regexp.MustCompile(`^nc-[A-Za-z0-9_-]{22}$`).MatchString(filepath.Base(path)) {
+			t.Fatal("nested native ledger escaped fixed temp scope")
+		}
+		if _, e := os.Lstat(path); !os.IsNotExist(e) {
+			t.Fatal("nested producer left its owned native directory")
+		}
+		t.Logf("OWNED_NATIVE_TMP:%s", path)
 	}
 }

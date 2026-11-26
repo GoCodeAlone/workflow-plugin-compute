@@ -7,7 +7,9 @@ package main
 
 import (
 	"bytes"
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,6 +21,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"unicode/utf8"
 )
 
@@ -33,7 +36,8 @@ type nativeCheckOptions struct {
 	host, tool, digest string
 	receipt            string
 	run                func(*exec.Cmd) error
-	cleanup            func(string) error
+	afterCleanup       func(string) error
+	workspace          func() (*nativeWorkspace, error)
 }
 
 type nativeValidationReceipt struct {
@@ -252,10 +256,16 @@ func checkNativeRelease(root string, args []string, opt nativeCheckOptions) (res
 		}
 	}
 	phase = "workspace"
-	owned, err := os.MkdirTemp("", "compute-native-check-")
-	if err != nil {
-		return "", errors.New("cannot create owned verifier directory")
+	makeWorkspace := opt.workspace
+	if makeWorkspace == nil {
+		makeWorkspace = newNativeWorkspace
 	}
+	workspace, err := makeWorkspace()
+	if err != nil || workspace == nil {
+		return "", errors.Join(errors.New("cannot create owned short verifier directory"), err)
+	}
+	owned := workspace.path
+
 	defer func() {
 		// Preserve the primary phase even if cleanup independently fails.
 		diagnostic.PrimaryPhase = "none"
@@ -263,7 +273,13 @@ func checkNativeRelease(root string, args []string, opt nativeCheckOptions) (res
 			diagnostic.PrimaryPhase = phase
 		}
 		diagnostic.Cleanup = "removed"
-		if e := opt.cleanup(owned); e != nil {
+		cleanupErr := workspace.cleanup()
+		// Optional synthetic post-cleanup check; production never substitutes
+		// the mandatory identity-bound cleanup with a caller-supplied remover.
+		if cleanupErr == nil && opt.afterCleanup != nil {
+			cleanupErr = opt.afterCleanup(owned)
+		}
+		if e := cleanupErr; e != nil {
 			diagnostic.Cleanup = "failed"
 			err = errors.Join(err, fmt.Errorf("owned verifier cleanup failed: %w", e))
 			result = ""
@@ -281,9 +297,16 @@ func checkNativeRelease(root string, args []string, opt nativeCheckOptions) (res
 			}
 		}
 	}()
-	home, tmp := filepath.Join(owned, "home"), filepath.Join(owned, "tmp")
-	if os.Mkdir(home, 0700) != nil || os.Mkdir(tmp, 0700) != nil {
-		return "", errors.New("cannot prepare owned verifier environment")
+	home, tmp := filepath.Join(owned, "h"), owned
+	if e := workspace.parent.Mkdir(workspace.name+"/h", 0700); e != nil {
+		return "", fmt.Errorf("cannot prepare owned verifier HOME: %w", e)
+	}
+	homeInfo, e := workspace.parent.Lstat(workspace.name + "/h")
+	if e != nil {
+		return "", fmt.Errorf("cannot verify owned verifier HOME: %w", e)
+	}
+	if e = nativePrivateDirectory(homeInfo, os.Geteuid()); e != nil {
+		return "", e
 	}
 	cmd := exec.Command(opt.tool, "plugin", "verify-capabilities", "--binary", artifact, root)
 	cmd.Dir = root
@@ -333,7 +356,7 @@ func main() {
 		result, err = checkNativeRelease(root, os.Args[1:], nativeCheckOptions{
 			host: runtime.GOOS + "/" + runtime.GOARCH, tool: os.Getenv("WFCTL_BIN"), digest: nativeWfctlSHA,
 			receipt: os.Getenv("NATIVE_CHECK_RECEIPT"),
-			run:     (*exec.Cmd).Run, cleanup: os.RemoveAll,
+			run:     (*exec.Cmd).Run, workspace: newNativeWorkspace,
 		})
 		if err == nil {
 			fmt.Println(result)
@@ -419,4 +442,163 @@ func classifyNativeReportedError(text, tmp string, overflow bool) (string, *int)
 		return kind, nil
 	}
 	return unknown()
+}
+
+// A single private root is the exact TMPDIR handed to wfctl. The default
+// go-plugin Unix basename is /plugin plus at most ten uint32 decimal digits.
+const nativeSocketSuffixMax = len("/plugin") + 10
+
+type nativeWorkspace struct {
+	parent     *os.Root
+	name, path string
+	identity   os.FileInfo
+	closed     bool
+	cleanupErr error
+}
+
+func nativeWorkspacePath(parent, name string) (string, error) {
+	if !filepath.IsAbs(parent) || filepath.Clean(parent) != parent || !regexp.MustCompile(`^nc-[A-Za-z0-9_-]{22}$`).MatchString(name) {
+		return "", errors.New("noncanonical native workspace name")
+	}
+	path := filepath.Join(parent, name)
+	if len(path)+nativeSocketSuffixMax > 107 {
+		return "", errors.New("native workspace exceeds Linux Unix-socket byte budget")
+	}
+	return path, nil
+}
+
+func nativeDirectoryOwner(info os.FileInfo) (int, error) {
+	if info == nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return 0, errors.New("native workspace is not a directory")
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return 0, errors.New("native directory ownership unavailable")
+	}
+	return int(stat.Uid), nil
+}
+func nativePrivateDirectory(info os.FileInfo, uid int) error {
+	owner, e := nativeDirectoryOwner(info)
+	if e != nil {
+		return e
+	}
+	if owner != uid || info.Mode().Perm() != 0700 {
+		return errors.New("native workspace must be owned and mode0700")
+	}
+	return nil
+}
+func nativeTempParent(info os.FileInfo, uid int) error {
+	owner, e := nativeDirectoryOwner(info)
+	if e != nil {
+		return e
+	}
+	if owner == uid && info.Mode().Perm() == 0700 {
+		return nil
+	}
+	if owner != 0 || (info.Mode().Perm()&0022 != 0 && info.Mode()&os.ModeSticky == 0) {
+		return errors.New("native temp parent lacks trusted ownership/isolation")
+	}
+	return nil
+}
+
+func newNativeWorkspace() (*nativeWorkspace, error) { return newNativeWorkspaceAt("/tmp", rand.Reader) }
+
+// The path/entropy parameters are private test seams. main always selects the
+// fixed /tmp factory and crypto/rand; there is no environment/CLI override.
+func newNativeWorkspaceAt(base string, entropy io.Reader) (workspace *nativeWorkspace, err error) {
+	canonical, e := filepath.EvalSymlinks(base)
+	if e != nil {
+		return nil, fmt.Errorf("cannot resolve native temp parent: %w", e)
+	}
+	canonical, e = filepath.Abs(canonical)
+	if e != nil {
+		return nil, e
+	}
+	anchor, e := os.OpenRoot(canonical)
+	if e != nil {
+		return nil, fmt.Errorf("cannot open native temp parent: %w", e)
+	}
+	transferred := false
+	defer func() {
+		if !transferred {
+			err = errors.Join(err, anchor.Close())
+		}
+	}()
+	info, e := anchor.Lstat(".")
+	if e != nil {
+		return nil, e
+	}
+	if e = nativeTempParent(info, os.Geteuid()); e != nil {
+		return nil, e
+	}
+	byPath, e := os.Lstat(canonical)
+	if e != nil || !os.SameFile(info, byPath) {
+		return nil, errors.New("native temp parent path/descriptor mismatch")
+	}
+	if _, e = nativeWorkspacePath(canonical, "nc-"+strings.Repeat("A", 22)); e != nil {
+		return nil, e
+	}
+	for attempt := 0; attempt < 8; attempt++ {
+		var nonce [16]byte
+		if _, e = io.ReadFull(entropy, nonce[:]); e != nil {
+			return nil, fmt.Errorf("native workspace entropy failed: %w", e)
+		}
+		name := "nc-" + base64.RawURLEncoding.EncodeToString(nonce[:])
+		path, e := nativeWorkspacePath(canonical, name)
+		if e != nil {
+			return nil, e
+		}
+		if e = anchor.Mkdir(name, 0700); os.IsExist(e) {
+			continue
+		} else if e != nil {
+			return nil, fmt.Errorf("native workspace creation failed: %w", e)
+		}
+		child, e := anchor.Lstat(name)
+		owner, ownerErr := nativeDirectoryOwner(child)
+		if e != nil || ownerErr != nil || owner != os.Geteuid() {
+			// No identity was admitted: close the capability and retain the entry
+			// rather than deleting an entry that might no longer be ours.
+			return nil, errors.Join(errors.New("new native workspace identity unavailable; possible residue retained"), e, ownerErr)
+		}
+		workspace = &nativeWorkspace{parent: anchor, name: name, path: path, identity: child}
+		transferred = true
+		admissionErr := nativePrivateDirectory(child, os.Geteuid())
+		actual, pathErr := os.Lstat(path)
+		if pathErr != nil || !os.SameFile(child, actual) {
+			admissionErr = errors.Join(admissionErr, errors.New("native child path/descriptor mismatch"), pathErr)
+		}
+		if admissionErr != nil {
+			return nil, errors.Join(admissionErr, workspace.cleanup())
+		}
+		return workspace, nil
+	}
+	return nil, errors.New("native workspace collision budget exhausted")
+}
+
+func (w *nativeWorkspace) cleanup() (err error) {
+	if w.closed {
+		return w.cleanupErr
+	}
+	w.closed = true
+	defer func() { err = errors.Join(err, w.parent.Close()); w.cleanupErr = err }()
+	current, e := w.parent.Lstat(w.name)
+	if e != nil || !os.SameFile(w.identity, current) {
+		return errors.New("native workspace identity changed; cleanup refused, residue retained")
+	}
+	owner, e := nativeDirectoryOwner(current)
+	if e != nil || owner != os.Geteuid() {
+		return errors.New("native workspace owner changed; cleanup refused, residue retained")
+	}
+	byPath, e := os.Lstat(w.path)
+	if e != nil || !os.SameFile(current, byPath) {
+		return errors.New("native workspace path changed; cleanup refused, residue retained")
+	}
+	privacyErr := nativePrivateDirectory(current, os.Geteuid())
+	if e = w.parent.RemoveAll(w.name); e != nil {
+		return errors.Join(privacyErr, fmt.Errorf("native owned removal failed: %w", e))
+	}
+	if _, e = w.parent.Lstat(w.name); !os.IsNotExist(e) {
+		return errors.Join(privacyErr, errors.New("native workspace remains after cleanup"))
+	}
+	return privacyErr
 }
