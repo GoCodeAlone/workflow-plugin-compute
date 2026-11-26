@@ -97,6 +97,8 @@ type tagNativeStatus struct {
 	Exit           *int   `json:"exit,omitempty"`
 	Cleanup        string `json:"cleanup"`
 	TmpBytes       *int   `json:"tmpdir_bytes,omitempty"`
+	ReasonHint     string `json:"reason_hint,omitempty"`
+	SocketBytes    *int   `json:"socket_path_bytes,omitempty"`
 }
 
 func tagNativeDiagnostic(source string, env []string) string {
@@ -182,6 +184,21 @@ func tagNativeDiagnostic(source string, env []string) string {
 			return unusable
 		}
 	default:
+		return unusable
+	}
+	hints := map[string]bool{"unclassified": true, "reported-unix-socket-path-length": true, "reported-plugin-handshake": true, "reported-manifest-parse": true, "reported-manifest-validation": true, "reported-manifest-rpc": true, "reported-contract-rpc": true, "reported-manifest-mismatch": true}
+	if d.ReasonHint != "" {
+		if !hints[d.ReasonHint] || d.PrimaryPhase != "verifier" || !d.Joined || d.Exit == nil || *d.Exit <= 0 || d.VerifierResult != "exited" {
+			return unusable
+		}
+		if d.ReasonHint == "reported-unix-socket-path-length" {
+			if d.SocketBytes == nil || d.TmpBytes == nil || *d.SocketBytes <= 107 || *d.SocketBytes < *d.TmpBytes+8 || *d.SocketBytes > *d.TmpBytes+17 {
+				return unusable
+			}
+		} else if d.SocketBytes != nil {
+			return unusable
+		}
+	} else if d.SocketBytes != nil {
 		return unusable
 	}
 	// All values here have been validated against fixed enums/integer bounds.

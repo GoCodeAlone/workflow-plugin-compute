@@ -51,8 +51,8 @@ jobs:
           97f7baac3309f1b0889b30516fe3dcb581c0ba099130f7904e51d11963f534c4  go.sum
           f7587c98b2032584cc7361e7f68f90f445d4162b3856c2e01f41d61424ff243b  scripts/check-release-archives.go
           6bb5844033c697ed57c44614df06dc0164f5af79c6e02436fd05b4bbae08ff26  scripts/check-release-archives_test.go
-          84a2952559c853257d714f0f821858941b506469c376454bc5c3b52526a7ab5d  scripts/check-native-release.go
-          0f08ca658f13ce9177092e7d36689dbcb1248d187390ffcd7375fd251948d902  scripts/check-native-release_test.go
+          9fe612289e89d68fee1758bfbe4bb10e865474bf74ce83ce6336f2cdfac67e0c  scripts/check-native-release.go
+          4f840be2cd14577133d7f524ef3015c6dd58b3af7102efface925c44213e8192  scripts/check-native-release_test.go
           INPUTS
           test "$(go version)" = 'go version go1.27.4 linux/amd64'
           ENGINE_BIN="$(command -v goreleaser)"
@@ -122,8 +122,8 @@ jobs:
           97f7baac3309f1b0889b30516fe3dcb581c0ba099130f7904e51d11963f534c4  go.sum
           f7587c98b2032584cc7361e7f68f90f445d4162b3856c2e01f41d61424ff243b  scripts/check-release-archives.go
           6bb5844033c697ed57c44614df06dc0164f5af79c6e02436fd05b4bbae08ff26  scripts/check-release-archives_test.go
-          84a2952559c853257d714f0f821858941b506469c376454bc5c3b52526a7ab5d  scripts/check-native-release.go
-          0f08ca658f13ce9177092e7d36689dbcb1248d187390ffcd7375fd251948d902  scripts/check-native-release_test.go
+          9fe612289e89d68fee1758bfbe4bb10e865474bf74ce83ce6336f2cdfac67e0c  scripts/check-native-release.go
+          4f840be2cd14577133d7f524ef3015c6dd58b3af7102efface925c44213e8192  scripts/check-native-release_test.go
           INPUTS
           home="$(mktemp -d "$OWNED_ROOT/package-home.XXXXXXXX")"
           tmp="$(mktemp -d "$OWNED_ROOT/package-tmp.XXXXXXXX")"

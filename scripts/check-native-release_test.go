@@ -44,8 +44,12 @@ func nativeFixture(t *testing.T) (string, []string, nativeCheckOptions) {
 
 func nativeEnvironment(t *testing.T, cmd *exec.Cmd, root string) string {
 	t.Helper()
-	if cmd.Dir != root || cmd.Stdin != nil || cmd.Stdout != io.Discard || cmd.Stderr != io.Discard {
+	if cmd.Dir != root || cmd.Stdin != nil || cmd.Stdout != io.Discard || cmd.Stderr == nil || cmd.Stderr == io.Discard {
 		t.Fatal("cwd or standard streams changed")
+	}
+	capture, ok := cmd.Stderr.(interface{ Len() int })
+	if !ok || capture.Len() != 0 {
+		t.Fatal("stderr is not a fresh bounded private capture")
 	}
 	values := map[string]string{}
 	for _, entry := range cmd.Env {
@@ -578,5 +582,97 @@ func TestNativeReceiptResolvedSourceRefusal(t *testing.T) {
 	entries, e := os.ReadDir(filepath.Join(root, "inside"))
 	if e != nil || len(entries) != 0 {
 		t.Fatal("refused destination changed source")
+	}
+}
+
+// Pure source-bound pathname arithmetic and synthetic reported text only.
+// No test binds, connects to or probes a socket.
+func TestNativeReportedReasonBoundaries(t *testing.T) {
+	tmp99 := "/" + strings.Repeat("a", 98)
+	tmp90 := "/" + strings.Repeat("b", 89)
+	for _, tc := range []struct {
+		name, tmp, text, want string
+		overflow              bool
+		size                  int
+	}{
+		{"107-fits", tmp99, "plugin dial: listen unix " + tmp99 + "/plugin0: bind: invalid argument", "reported-plugin-handshake", false, 0},
+		{"108-overflows", tmp99, "plugin dial: listen unix " + tmp99 + "/plugin10: bind: invalid argument", "reported-unix-socket-path-length", false, 108},
+		{"116-upper-bound", tmp99, "plugin dial: listen unix " + tmp99 + "/plugin4294967295: bind: invalid argument", "reported-unix-socket-path-length", false, 116},
+		{"short-worst-case-fits", tmp90, "plugin dial: listen unix " + tmp90 + "/plugin4294967295: bind: invalid argument", "reported-plugin-handshake", false, 0},
+		{"leading-zero", tmp99, "plugin dial: listen unix " + tmp99 + "/plugin042: bind: invalid argument", "unclassified", false, 0},
+		{"uint32-overflow", tmp99, "plugin dial: listen unix " + tmp99 + "/plugin4294967296: bind: invalid argument", "unclassified", false, 0},
+		{"wrong-tmp", tmp99, "plugin dial: listen unix /inert-other/plugin42: bind: invalid argument", "unclassified", false, 0},
+		{"wrong-errno", tmp99, "plugin dial: listen unix " + tmp99 + "/plugin42: bind: permission denied", "unclassified", false, 0},
+		{"ambiguous", tmp99, strings.Repeat("plugin dial: listen unix "+tmp99+"/plugin42: bind: invalid argument\n", 2), "unclassified", false, 0},
+		{"conflicting", tmp99, "plugin dial: listen unix " + tmp99 + "/plugin42: bind: invalid argument\nGetManifest RPC: inert-private-value", "unclassified", false, 0},
+		{"truncated", tmp99, "plugin dial: listen unix " + tmp99 + "/plugin42: bind: invalid argument", "unclassified", true, 0},
+		{"manifest-parse", tmp99, "wfctl: plugin.json parse: inert-private-value", "reported-manifest-parse", false, 0},
+		{"manifest-validation", tmp99, "wfctl: plugin.json validate: inert-private-value", "reported-manifest-validation", false, 0},
+		{"manifest-rpc", tmp99, "wfctl: GetManifest RPC: inert-private-value", "reported-manifest-rpc", false, 0},
+		{"contract-rpc", tmp99, "wfctl: GetContractRegistry RPC: inert-private-value", "reported-contract-rpc", false, 0},
+		{"manifest-mismatch", tmp99, "wfctl: verify-capabilities: 2 mismatch(es): inert-private-value", "reported-manifest-mismatch", false, 0},
+		{"misleading-socket-substring", tmp99, "inertnotlisten unix " + tmp99 + "/plugin42: bind: invalid argument", "unclassified", false, 0},
+		{"misleading-substring", tmp99, "inertnotplugin dial: inert-private-value", "unclassified", false, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, n := classifyNativeReportedError(tc.text, tc.tmp, tc.overflow)
+			if got != tc.want || (n == nil) != (tc.size == 0) || (n != nil && *n != tc.size) {
+				t.Fatal("reported-text category or bounded length differs from source contract")
+			}
+		})
+	}
+}
+
+func TestNativeReportedReasonActualFunction(t *testing.T) {
+	// Explicit owned long directory: the test must not rely on an ambient
+	// Mac/CI path length. Only regular files and finite shell output are used.
+	longTemp := filepath.Join(t.TempDir(), strings.Repeat("x", 120))
+	if e := os.Mkdir(longTemp, 0700); e != nil {
+		t.Fatal(e)
+	}
+	t.Setenv("TMPDIR", longTemp)
+	root, args, opt := nativeFixture(t)
+	dir := t.TempDir()
+	if e := os.Chmod(dir, 0700); e != nil {
+		t.Fatal(e)
+	}
+	opt.receipt = filepath.Join(dir, "native.json")
+	body := []byte("#!/bin/sh\nprintf 'plugin dial: listen unix %s/plugin42: bind: invalid argument\n' \"$TMPDIR\" >&2\nexit 1\n")
+	if e := os.WriteFile(opt.tool, body, 0700); e != nil {
+		t.Fatal(e)
+	}
+	opt.digest, _ = nativeDigest(opt.tool, 160<<20, true)
+	opt.run = func(c *exec.Cmd) error { return c.Run() }
+	_, e := checkNativeRelease(root, args, opt)
+	var exit *exec.ExitError
+	if !errors.As(e, &exit) || exit.ExitCode() != 1 {
+		t.Fatal("reported text changed actual failure")
+	}
+	b, readErr := os.ReadFile(opt.receipt + ".status")
+	if readErr != nil {
+		t.Fatal("failure diagnostic missing")
+	}
+	var d map[string]any
+	if e := json.Unmarshal(b, &d); e != nil {
+		t.Fatal(e)
+	}
+	if d["reason_hint"] != "reported-unix-socket-path-length" || d["socket_path_bytes"] != d["tmpdir_bytes"].(float64)+9 {
+		t.Fatal("real function did not classify finite synthetic helper output")
+	}
+	t.Logf("NATIVE_REPORTED_REASON_FIXTURE:%s", b)
+	if bytes.Contains(b, []byte("listen unix")) || bytes.Contains(b, []byte(root)) || len(b) > 512 {
+		t.Fatal("raw reported text escaped diagnostic")
+	}
+}
+
+func TestNativeReportedCaptureBound(t *testing.T) {
+	var w nativeReportedOutput
+	payload := bytes.Repeat([]byte{'x'}, (16<<10)+1)
+	n, e := w.Write(payload)
+	if e != nil || n != len(payload) || w.Len() != 16<<10 || !w.overflow {
+		t.Fatal("capture is not bounded and accepting")
+	}
+	if hint, size := classifyNativeReportedError(w.String(), "/inert", w.overflow); hint != "unclassified" || size != nil {
+		t.Fatal("truncated capture was classified")
 	}
 }

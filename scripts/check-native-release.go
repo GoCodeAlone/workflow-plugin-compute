@@ -6,6 +6,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
@@ -14,8 +15,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // Immutable official Workflow release v0.78.2, asset 442231027. This binds the
@@ -54,6 +58,8 @@ type nativeFailureDiagnostic struct {
 	Exit           *int   `json:"exit,omitempty"`
 	Cleanup        string `json:"cleanup"`
 	TmpBytes       *int   `json:"tmpdir_bytes,omitempty"`
+	ReasonHint     string `json:"reason_hint,omitempty"`
+	SocketBytes    *int   `json:"socket_path_bytes,omitempty"`
 }
 
 func writeNativeFailureDiagnostic(path string, diagnostic nativeFailureDiagnostic) error {
@@ -283,7 +289,8 @@ func checkNativeRelease(root string, args []string, opt nativeCheckOptions) (res
 	cmd.Dir = root
 	cmd.Env = []string{"PATH=/usr/bin:/bin", "HOME=" + home, "TMPDIR=" + tmp, "LANG=C", "LC_ALL=C", "WFCTL_DIFFCACHE=:memory:", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_TERMINAL_PROMPT=0"}
 	// No raw plugin output or inherited stdin: only fixed gate diagnostics.
-	cmd.Stdout, cmd.Stderr = io.Discard, io.Discard
+	var reported nativeReportedOutput
+	cmd.Stdout, cmd.Stderr = io.Discard, &reported
 	phase = "verifier"
 	n := len(tmp)
 	diagnostic.TmpBytes = &n // Exactly the TMPDIR supplied above.
@@ -298,6 +305,9 @@ func checkNativeRelease(root string, args []string, opt nativeCheckOptions) (res
 		diagnostic.VerifierResult = "not-started"
 	default:
 		diagnostic.VerifierResult = "state-unavailable"
+	}
+	if runErr != nil && diagnostic.Joined && diagnostic.Exit != nil && *diagnostic.Exit > 0 {
+		diagnostic.ReasonHint, diagnostic.SocketBytes = classifyNativeReportedError(reported.String(), tmp, reported.overflow)
 	}
 	if runErr != nil {
 		return "", fmt.Errorf("runtime identity/version/declared-IaC verifier failed: %w", runErr)
@@ -333,4 +343,80 @@ func main() {
 		fmt.Fprintln(os.Stderr, "native release check:", err)
 		os.Exit(1)
 	}
+}
+
+// The classifier consumes untrusted reported text, not kernel evidence. The
+// exact authenticated wfctl can embed plugin stderr. Only fixed hints and a
+// validated byte count are retained; no capture bytes ever enter diagnostics.
+type nativeReportedOutput struct {
+	bytes.Buffer
+	overflow bool
+}
+
+func (w *nativeReportedOutput) Write(p []byte) (int, error) {
+	n := len(p)
+	left := (16 << 10) - w.Len()
+	if left > 0 {
+		w.Buffer.Write(p[:min(left, n)])
+	}
+	if n > left {
+		w.overflow = true
+	}
+	return n, nil
+}
+
+func classifyNativeReportedError(text, tmp string, overflow bool) (string, *int) {
+	unknown := func() (string, *int) { return "unclassified", nil }
+	if overflow || !utf8.ValidString(text) || strings.ContainsRune(text, '\x00') || !filepath.IsAbs(tmp) || strings.ContainsAny(tmp, "\r\n\x00") {
+		return unknown()
+	}
+	// These prefixes come from pinned wfctl v0.78.2. Expected wrapper nesting
+	// is recognized; conflicting independent categories remain unclassified.
+	patterns := []struct{ pattern, kind string }{
+		{`(?m)^(?:error: |wfctl: )?(?:plugin dial:|timeout waiting for plugin handshake)`, "reported-plugin-handshake"},
+		{`(?m)^(?:error: |wfctl: )?plugin[.]json parse:`, "reported-manifest-parse"},
+		{`(?m)^(?:error: |wfctl: )?plugin[.]json validate:`, "reported-manifest-validation"},
+		{`(?m)^(?:error: |wfctl: )?GetManifest RPC:`, "reported-manifest-rpc"},
+		{`(?m)^(?:error: |wfctl: )?GetContractRegistry RPC:`, "reported-contract-rpc"},
+		{`(?m)^(?:error: |wfctl: )?verify-capabilities: [1-9][0-9]{0,3} mismatch[(]es[)]:`, "reported-manifest-mismatch"},
+	}
+	kind := ""
+	matches := 0
+	for _, p := range patterns {
+		n := len(regexp.MustCompile(p.pattern).FindAllStringIndex(text, -1))
+		if n > 0 {
+			kind = p.kind
+			matches += n
+		}
+	}
+	if matches > 1 {
+		return unknown()
+	}
+	if strings.Contains(text, "listen unix ") {
+		if strings.Count(text, "listen unix ") != 1 {
+			return unknown()
+		}
+		pattern := `(?:^|[ \t\r\n"(=:])listen unix (` + regexp.QuoteMeta(tmp+"/plugin") + `([0-9]{1,10})): bind: invalid argument(?:$|[\r\n" )])`
+		m := regexp.MustCompile(pattern).FindStringSubmatch(text)
+		if len(m) != 3 {
+			return unknown()
+		}
+		n, e := strconv.ParseUint(m[2], 10, 32)
+		if e != nil || strconv.FormatUint(n, 10) != m[2] {
+			return unknown()
+		}
+		// Linux/amd64 RawSockaddrUnix.Path is108bytes, including the required
+		// terminator for this non-abstract pathname. No socket syscall occurs here.
+		if len(m[1]) > 107 {
+			if kind != "" && kind != "reported-plugin-handshake" {
+				return unknown()
+			}
+			size := len(m[1])
+			return "reported-unix-socket-path-length", &size
+		}
+	}
+	if kind != "" {
+		return kind, nil
+	}
+	return unknown()
 }

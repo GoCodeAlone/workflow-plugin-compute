@@ -368,3 +368,77 @@ func TestTagDiagnosticFreshnessBeforeExecution(t *testing.T) {
 		t.Fatalf("stale diagnostic not refused before execution: %v", e)
 	}
 }
+
+func TestTagReportedReasonWire(t *testing.T) {
+	good := `{"schema":1,"scope":"native-hook-diagnostic","primary_phase":"verifier","verifier_result":"exited","joined":true,"exit":1,"cleanup":"removed","tmpdir_bytes":99,"reason_hint":"reported-unix-socket-path-length","socket_path_bytes":108}`
+	for _, name := range []string{"valid", "unknown-hint", "fits-budget", "wrong-length", "wrong-hint-shape", "not-joined", "exit-zero", "wrong-phase", "hint-absent"} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			if e := os.Chmod(dir, 0700); e != nil {
+				t.Fatal(e)
+			}
+			receipt := filepath.Join(dir, "native.json")
+			wire := good
+			want := `"observation":"unusable"`
+			switch name {
+			case "valid":
+				want = `"observation":"refused"`
+			case "unknown-hint":
+				wire = strings.Replace(good, "reported-unix-socket-path-length", "inert-private-cause", 1)
+			case "fits-budget":
+				wire = strings.Replace(good, `"socket_path_bytes":108`, `"socket_path_bytes":107`, 1)
+			case "wrong-length":
+				wire = strings.Replace(good, `"socket_path_bytes":108`, `"socket_path_bytes":117`, 1)
+			case "wrong-hint-shape":
+				wire = strings.Replace(good, "reported-unix-socket-path-length", "reported-plugin-handshake", 1)
+			case "not-joined":
+				wire = strings.Replace(good, `"joined":true`, `"joined":false`, 1)
+			case "exit-zero":
+				wire = strings.Replace(good, `"exit":1`, `"exit":0`, 1)
+			case "wrong-phase":
+				wire = strings.Replace(good, `"primary_phase":"verifier"`, `"primary_phase":"postcheck"`, 1)
+			case "hint-absent":
+				wire = strings.Replace(good, `,"reason_hint":"reported-unix-socket-path-length"`, "", 1)
+			}
+			if e := os.WriteFile(receipt+".status", []byte(wire), 0600); e != nil {
+				t.Fatal(e)
+			}
+			_, e := runTagChild(t.TempDir(), []string{"PATH=/usr/bin:/bin", "NATIVE_CHECK_RECEIPT=" + receipt}, []string{"/bin/sh", "-c", "exit 1"})
+			if e == nil || !strings.Contains(e.Error(), want) || strings.Contains(e.Error(), "private") {
+				t.Fatal("strict consumer accepted or disclosed malformed reported hint")
+			}
+		})
+	}
+}
+
+func TestTagReportedReasonProducerCrossing(t *testing.T) {
+	argv := []string{filepath.Join(runtime.GOROOT(), "bin/go"), "test", "-v", "-count=1", "-p=1", "-timeout=30s", "-run", "^TestNativeReportedReasonActualFunction$", "check-native-release.go", "check-native-release_test.go"}
+	b, e := runTagChild(".", os.Environ(), argv)
+	if e != nil {
+		t.Fatal("finite actual producer fixture failed")
+	}
+	var wire string
+	for _, line := range strings.Split(string(b), "\n") {
+		if _, v, ok := strings.Cut(line, "NATIVE_REPORTED_REASON_FIXTURE:"); ok {
+			if wire != "" {
+				t.Fatal("ambiguous producer fixture")
+			}
+			wire = v
+		}
+	}
+	if wire == "" {
+		t.Fatal("actual reported-text producer was not observed")
+	}
+	dir := t.TempDir()
+	if e := os.Chmod(dir, 0700); e != nil {
+		t.Fatal(e)
+	}
+	receipt := filepath.Join(dir, "native.json")
+	if e := os.WriteFile(receipt+".status", []byte(wire), 0600); e != nil {
+		t.Fatal(e)
+	}
+	_, e = runTagChild(t.TempDir(), []string{"PATH=/usr/bin:/bin", "NATIVE_CHECK_RECEIPT=" + receipt}, []string{"/bin/sh", "-c", "exit 1"})
+	if e == nil || !strings.Contains(e.Error(), `"observation":"refused"`) || !strings.Contains(e.Error(), `"reason_hint":"reported-unix-socket-path-length"`) {
+		t.Fatal("actual reported-text wire did not cross strict consumer")
+	}
+}
