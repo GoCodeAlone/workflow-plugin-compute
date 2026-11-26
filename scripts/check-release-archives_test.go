@@ -89,6 +89,15 @@ func TestArchiveReleaseEngineParity(t *testing.T) {
 			"test -f \"$ENGINE_BIN\" && test ! -L \"$ENGINE_BIN\"",
 		} {
 			count := 1
+			if name == "release.yml" && required == "shasum -a 256 --check --strict" {
+				// wfctl is authenticated independently too. Bind this assertion
+				// to the engine's exact guard, not a file-wide checksum count.
+				engineGuard := `printf '%s  %s\n' 'd124b61b79baf6d7e2727bb018e7115c045c076df82c13795bb19f9ace4b612d' "$ENGINE_BIN" | shasum -a 256 --check --strict`
+				if strings.Count(string(b), engineGuard) != 1 {
+					t.Error("release must authenticate the exact engine path")
+				}
+				continue
+			}
 			if name == "archive-qualification.yml" && (strings.HasPrefix(required, "d124") || strings.Contains(required, "shasum") || strings.HasPrefix(required, "test -f")) {
 				count = 2 // pre-credential binding and pre-execution recheck
 			}
@@ -354,7 +363,7 @@ func TestArchiveInputAnchors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, n := range []string{".goreleaser.yaml", "scripts/check-build-toolchain.go", "go.mod", "go.sum", "scripts/check-release-archives.go", "scripts/check-release-archives_test.go"} {
+	for _, n := range []string{".goreleaser.yaml", "scripts/check-build-toolchain.go", "go.mod", "go.sum", "scripts/check-release-archives.go", "scripts/check-release-archives_test.go", "scripts/check-native-release.go", "scripts/check-native-release_test.go"} {
 		data, e := os.ReadFile(filepath.Join("..", n))
 		if e != nil {
 			t.Fatal(e)
@@ -362,6 +371,37 @@ func TestArchiveInputAnchors(t *testing.T) {
 		if strings.Count(string(b), checksumBytes(data)+"  "+n) != 2 {
 			t.Errorf("both pre-acquisition and packaging anchors must match %s", n)
 		}
+	}
+}
+
+func TestNativeReleaseHookContract(t *testing.T) {
+	b, err := os.ReadFile("../.goreleaser.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	compiler := strings.Index(string(b), `go run ./scripts/check-build-toolchain.go "{{ .Path }}"`)
+	gate := strings.Index(string(b), `env GOOS= GOARCH= go run ./scripts/check-native-release.go "{{ .Os }}" "{{ .Arch }}" "{{ .Path }}" "{{ .IsSnapshot }}"`)
+	if compiler < 0 || gate <= compiler {
+		t.Fatal("native release check must be a real post-build hook after compiler validation")
+	}
+	b, err = os.ReadFile("../.github/workflows/release.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(b)
+	for _, required := range []string{
+		"0d41f3050b535e2bc7c1d6a5537ab2a60938e0b49c4c4f12ece1be883762dfc8",
+		"WFCTL_BIN: ${{ runner.temp }}/wfctl-bin/wfctl",
+		"shasum -a 256 --check --strict",
+	} {
+		if !strings.Contains(s, required) {
+			t.Fatalf("release verifier authentication/input missing: %s", required)
+		}
+	}
+	digest := strings.Index(s, "0d41f3050b535e2bc7c1d6a5537ab2a60938e0b49c4c4f12ece1be883762dfc8")
+	chmod := strings.Index(s, `chmod 500 "${RUNNER_TEMP}/wfctl-bin/wfctl"`)
+	if chmod <= digest || strings.Contains(s, "skipping verify-capabilities") || strings.Contains(s, "Verify capabilities (runtime truth-check)") {
+		t.Fatal("wfctl must be authenticated before chmod and checking must not remain after publication")
 	}
 }
 

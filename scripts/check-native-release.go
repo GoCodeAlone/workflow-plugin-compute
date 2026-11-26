@@ -1,0 +1,177 @@
+//go:build ignore
+
+// Native release post-hook. wfctl v0.78.2 checks identity/version and declared
+// IaC services, not complete capability-list parity. Snapshot and cross-target
+// builds retain compiler/archive checks without claiming runtime acceptance.
+package main
+
+import (
+	"crypto/sha256"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strings"
+)
+
+// Immutable official Workflow release v0.78.2, asset 442231027. This binds the
+// downloaded bytes to its reviewed GitHub digest; no independent signature is
+// claimed. Neither an environment variable nor a CLI flag can change the pin.
+const nativeWfctlSHA = "0d41f3050b535e2bc7c1d6a5537ab2a60938e0b49c4c4f12ece1be883762dfc8"
+
+// Dependencies are explicit for inert unit controls; main supplies fixed host,
+// digest and real command/cleanup operations, without a runtime override.
+type nativeCheckOptions struct {
+	host, tool, digest string
+	run                func(*exec.Cmd) error
+	cleanup            func(string) error
+}
+
+func nativeDigest(path string, limit int64, executable bool) (string, error) {
+	st, err := os.Lstat(path)
+	if err != nil || !st.Mode().IsRegular() || st.Size() <= 0 || st.Size() > limit || (executable && st.Mode().Perm()&0111 == 0) {
+		return "", errors.New("expected a bounded regular non-symlink file with required mode")
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return "", errors.New("cannot read validation input")
+	}
+	defer f.Close()
+	h := sha256.New()
+	n, err := io.Copy(h, io.LimitReader(f, limit+1))
+	if err != nil || n != st.Size() || n > limit {
+		return "", errors.New("validation input read/size mismatch")
+	}
+	return fmt.Sprintf("%x", h.Sum(nil)), nil
+}
+
+func nativeArtifactPath(root, rel string) (string, error) {
+	if filepath.Clean(rel) != rel || strings.ContainsAny(rel, "\\\x00\r\n") {
+		return "", errors.New("unexpected source/artifact path")
+	}
+	// v2.20.3 base.OptionsForTarget supplies an absolute .Path. Convert only
+	// canonical paths inside this source root; never admit outside artifacts.
+	if filepath.IsAbs(rel) {
+		var err error
+		rel, err = filepath.Rel(root, rel)
+		if err != nil {
+			return "", errors.New("unexpected source/artifact path")
+		}
+	}
+	if !strings.HasPrefix(rel, "dist/") {
+		return "", errors.New("unexpected source/artifact path")
+	}
+	p := root
+	for _, part := range strings.Split(rel, "/") {
+		if part == ".." || part == "." || part == "" {
+			return "", errors.New("noncanonical source/artifact path")
+		}
+		p = filepath.Join(p, part)
+		st, err := os.Lstat(p)
+		if err != nil || st.Mode()&os.ModeSymlink != 0 {
+			return "", errors.New("source/artifact path missing or redirected")
+		}
+	}
+	return p, nil
+}
+
+func checkNativeRelease(root string, args []string, opt nativeCheckOptions) (result string, err error) {
+	if len(args) != 4 || (args[3] != "true" && args[3] != "false") {
+		return "", errors.New("expected OS ARCH ARTIFACT SNAPSHOT_BOOL")
+	}
+	target := args[0] + "/" + args[1]
+	if target != "linux/amd64" && target != "darwin/arm64" {
+		return "", errors.New("unsupported release target")
+	}
+	if args[3] == "true" {
+		return "snapshot: native runtime check not performed; compiler/archive gates remain", nil
+	}
+	if target == "darwin/arm64" {
+		return "cross target: native runtime check not performed; compiler/archive gates remain", nil
+	}
+	if opt.host != "linux/amd64" {
+		return "", errors.New("native release verification requires a linux/amd64 host")
+	}
+	root, err = filepath.Abs(root)
+	if err != nil {
+		return "", errors.New("cannot resolve project root")
+	}
+	root, err = filepath.EvalSymlinks(root)
+	if err != nil {
+		return "", errors.New("cannot resolve project root")
+	}
+	artifact, err := nativeArtifactPath(root, args[2])
+	if err != nil {
+		return "", err
+	}
+	manifest := filepath.Join(root, "plugin.json")
+	if !filepath.IsAbs(opt.tool) || filepath.Clean(opt.tool) != opt.tool {
+		return "", errors.New("WFCTL_BIN must be an absolute verifier path")
+	}
+	toolSHA, err := nativeDigest(opt.tool, 160<<20, true)
+	if err != nil || toolSHA != opt.digest {
+		return "", errors.New("wfctl authentication failed")
+	}
+	artifactSHA, err := nativeDigest(artifact, 128<<20, true)
+	if err != nil {
+		return "", fmt.Errorf("artifact validation failed: %w", err)
+	}
+	manifestSHA, err := nativeDigest(manifest, 64<<10, false)
+	if err != nil {
+		return "", fmt.Errorf("manifest validation failed: %w", err)
+	}
+	owned, err := os.MkdirTemp("", "compute-native-check-")
+	if err != nil {
+		return "", errors.New("cannot create owned verifier directory")
+	}
+	defer func() {
+		if e := opt.cleanup(owned); e != nil {
+			err = errors.Join(err, fmt.Errorf("owned verifier cleanup failed: %w", e))
+			result = ""
+		}
+	}()
+	home, tmp := filepath.Join(owned, "home"), filepath.Join(owned, "tmp")
+	if os.Mkdir(home, 0700) != nil || os.Mkdir(tmp, 0700) != nil {
+		return "", errors.New("cannot prepare owned verifier environment")
+	}
+	cmd := exec.Command(opt.tool, "plugin", "verify-capabilities", "--binary", artifact, root)
+	cmd.Dir = root
+	cmd.Env = []string{"PATH=/usr/bin:/bin", "HOME=" + home, "TMPDIR=" + tmp, "LANG=C", "LC_ALL=C", "WFCTL_DIFFCACHE=:memory:", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_TERMINAL_PROMPT=0"}
+	// No raw plugin output or inherited stdin: only fixed gate diagnostics.
+	cmd.Stdout, cmd.Stderr = io.Discard, io.Discard
+	if e := opt.run(cmd); e != nil {
+		return "", fmt.Errorf("runtime identity/version/declared-IaC verifier failed: %w", e)
+	}
+	for _, input := range []struct {
+		path, before string
+		limit        int64
+		executable   bool
+	}{{opt.tool, toolSHA, 160 << 20, true}, {artifact, artifactSHA, 128 << 20, true}, {manifest, manifestSHA, 64 << 10, false}} {
+		after, e := nativeDigest(input.path, input.limit, input.executable)
+		if e != nil || after != input.before {
+			return "", errors.New("verifier, artifact or manifest changed during validation")
+		}
+	}
+	return "native runtime identity/version and declared IaC verified; full capability parity not asserted", nil
+}
+
+func main() {
+	root, err := os.Getwd()
+	if err == nil {
+		var result string
+		result, err = checkNativeRelease(root, os.Args[1:], nativeCheckOptions{
+			host: runtime.GOOS + "/" + runtime.GOARCH, tool: os.Getenv("WFCTL_BIN"), digest: nativeWfctlSHA,
+			run: (*exec.Cmd).Run, cleanup: os.RemoveAll,
+		})
+		if err == nil {
+			fmt.Println(result)
+		}
+	}
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "native release check:", err)
+		os.Exit(1)
+	}
+}

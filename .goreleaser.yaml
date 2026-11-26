@@ -20,6 +20,8 @@ builds:
       post:
         - cmd: 'env GOOS= GOARCH= go run ./scripts/check-build-toolchain.go "{{ .Path }}"'
           output: true
+        - cmd: 'env GOOS= GOARCH= go run ./scripts/check-native-release.go "{{ .Os }}" "{{ .Arch }}" "{{ .Path }}" "{{ .IsSnapshot }}"'
+          output: true
     env:
       - CGO_ENABLED=0
       - GOPRIVATE=github.com/GoCodeAlone/*

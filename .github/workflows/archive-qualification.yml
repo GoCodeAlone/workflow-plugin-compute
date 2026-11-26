@@ -40,17 +40,19 @@ jobs:
           [[ "$PR_HEAD" =~ ^[0-9a-f]{40}$ && "$PR_BASE" =~ ^[0-9a-f]{40}$ ]]
           test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
           test -z "$(git status --porcelain=v1 --untracked-files=all --ignored)"
-          for file in .goreleaser.yaml scripts/check-build-toolchain.go go.mod go.sum scripts/check-release-archives.go scripts/check-release-archives_test.go; do
+          for file in .goreleaser.yaml scripts/check-build-toolchain.go go.mod go.sum scripts/check-release-archives.go scripts/check-release-archives_test.go scripts/check-native-release.go scripts/check-native-release_test.go; do
             test -f "$file" && test ! -L "$file"
           done
           # Update these anchors together only after reviewing the affected bytes.
           sha256sum --check --strict <<'INPUTS'
-          ca7391c22eba7e030ad815c194da6c2ab40869a1936c8b2a2790895de3dd9baa  .goreleaser.yaml
+          8255a10418c3bcf015986e46a0bcf167fedbd80a66b81923d7095fd430653eff  .goreleaser.yaml
           68afa214265e8668c77bdd63db95f60e987d7f7cd82bb3df7d82a25618d4e732  scripts/check-build-toolchain.go
           de865e63ef12058b46d3e1bba849c80213ef2219bcd827b4b8fbdd6b7d363078  go.mod
           97f7baac3309f1b0889b30516fe3dcb581c0ba099130f7904e51d11963f534c4  go.sum
           c33b50d1a150abdae97a710ec8d4607528e00e87a164214945b16af29afab00a  scripts/check-release-archives.go
-          3aedb5a4b7a0723210a8dd33c4cead8fe6d0215c520aa215033df1d5b5b3149e  scripts/check-release-archives_test.go
+          c87a9f0af027d073abc719b93ca6b2f1ec51c759891e3c8583dc126faf593855  scripts/check-release-archives_test.go
+          254ac8d98a27300226ad38c9a849a084dd252438eb1f1a9f7e97d44c8f02e2a4  scripts/check-native-release.go
+          ad5b7c651d394e79028a03f387afbca8ecbaedff6811f93e52ed7b00019a880e  scripts/check-native-release_test.go
           INPUTS
           test "$(go version)" = 'go version go1.27.4 linux/amd64'
           ENGINE_BIN="$(command -v goreleaser)"
@@ -114,12 +116,14 @@ jobs:
         run: |
           # Actual archives remain on the disposable runner. No upload step.
           sha256sum --check --strict <<'INPUTS'
-          ca7391c22eba7e030ad815c194da6c2ab40869a1936c8b2a2790895de3dd9baa  .goreleaser.yaml
+          8255a10418c3bcf015986e46a0bcf167fedbd80a66b81923d7095fd430653eff  .goreleaser.yaml
           68afa214265e8668c77bdd63db95f60e987d7f7cd82bb3df7d82a25618d4e732  scripts/check-build-toolchain.go
           de865e63ef12058b46d3e1bba849c80213ef2219bcd827b4b8fbdd6b7d363078  go.mod
           97f7baac3309f1b0889b30516fe3dcb581c0ba099130f7904e51d11963f534c4  go.sum
           c33b50d1a150abdae97a710ec8d4607528e00e87a164214945b16af29afab00a  scripts/check-release-archives.go
-          3aedb5a4b7a0723210a8dd33c4cead8fe6d0215c520aa215033df1d5b5b3149e  scripts/check-release-archives_test.go
+          c87a9f0af027d073abc719b93ca6b2f1ec51c759891e3c8583dc126faf593855  scripts/check-release-archives_test.go
+          254ac8d98a27300226ad38c9a849a084dd252438eb1f1a9f7e97d44c8f02e2a4  scripts/check-native-release.go
+          ad5b7c651d394e79028a03f387afbca8ecbaedff6811f93e52ed7b00019a880e  scripts/check-native-release_test.go
           INPUTS
           home="$(mktemp -d "$OWNED_ROOT/package-home.XXXXXXXX")"
           tmp="$(mktemp -d "$OWNED_ROOT/package-tmp.XXXXXXXX")"
@@ -143,6 +147,7 @@ jobs:
           }
           clean go run ./scripts/check-build-toolchain.go
           (cd scripts && clean go test -count=1 -timeout=45s check-release-archives.go check-release-archives_test.go)
+          (cd scripts && clean go test -count=1 -timeout=45s check-native-release.go check-native-release_test.go)
           clean go run ./scripts/check-release-archives.go capture "$EXPECTED_SHA" "$OWNED_ROOT/before.json"
           checked_engine check --config=.goreleaser.yaml
           checked_engine release --config=.goreleaser.yaml --snapshot --clean --skip=publish,sign,notarize,sbom,docker,ko --parallelism=1 --timeout=10m
