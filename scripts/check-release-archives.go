@@ -13,6 +13,7 @@ import (
 	"debug/elf"
 	"debug/macho"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -23,6 +24,7 @@ import (
 	"regexp"
 	"runtime"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 )
@@ -354,6 +356,209 @@ type sourceState struct {
 	// Store exact bytes: RawMessage is normalized by receipt JSON marshaling.
 	Manifest []byte `json:"manifest"`
 }
+
+// Separate wire shape prevents snapshot/tag receipts from being reused across
+// modes. Only deterministic disposable local qualification tags are admitted.
+type tagSourceState struct {
+	Source *sourceState `json:"source"`
+	Tag    string       `json:"tag"`
+}
+
+// Wire contract produced by the native post-hook, not a runtime attestation.
+// The same-job owner controls these files; no hostile same-user isolation is
+// implied. This consumer still binds every fact to current verified bytes.
+type nativeValidationReceipt struct {
+	Schema      int    `json:"schema"`
+	Scope       string `json:"scope"`
+	Verdict     string `json:"verdict"`
+	Target      string `json:"target"`
+	Artifact    string `json:"artifact_path"`
+	ArtifactSHA string `json:"artifact_sha256"`
+	ManifestSHA string `json:"manifest_sha256"`
+	VerifierSHA string `json:"verifier_sha256"`
+}
+
+// Reuse the full verifier, including current physical output inventory and
+// archive bytes. A stored success report alone cannot attest to present bytes.
+// The temporary extraction is owned here, never executed, and removed before
+// returning success. This is not an adversarial concurrent-mutation boundary.
+func revalidateTagArchiveReport(root, sha, tag string, report *archiveReport, rawReport []byte) (err error) {
+	// Resolve placement before creation: TMPDIR inside the source is refused,
+	// including directory symlinks that would redirect into the source tree.
+	source, e := filepath.EvalSymlinks(root)
+	if e != nil {
+		return fmt.Errorf("cannot resolve archive recheck source")
+	}
+	temp, e := filepath.EvalSymlinks(os.TempDir())
+	if e != nil {
+		return fmt.Errorf("cannot resolve archive recheck temporary directory")
+	}
+	rel, e := filepath.Rel(source, temp)
+	if e != nil || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))) {
+		return fmt.Errorf("archive recheck temporary directory must be outside source")
+	}
+	owned, e := os.MkdirTemp(temp, "compute-tag-recheck-")
+	if e != nil {
+		return fmt.Errorf("cannot create owned archive recheck directory")
+	}
+	defer func() {
+		if e := os.RemoveAll(owned); e != nil {
+			err = errors.Join(err, fmt.Errorf("tag archive recheck cleanup failed: %w", e))
+		}
+	}()
+	current, e := verifyArchives(root, sha, report.Source, filepath.Join(owned, "extracted"), tag)
+	if e != nil {
+		return fmt.Errorf("tag archive revalidation failed: %w", e)
+	}
+	currentJSON, e := json.Marshal(current)
+	if e != nil {
+		return fmt.Errorf("tag archive recheck report invalid")
+	}
+	currentValue, e := jsonValue(currentJSON)
+	if e != nil {
+		return fmt.Errorf("tag archive recheck report invalid")
+	}
+	// Parse original wire bytes directly. Re-marshaling the decoded report
+	// would filter supplied BuildInfo fields and hide unexpected differences.
+	previousValue, e := jsonValue(rawReport)
+	if e != nil || !reflect.DeepEqual(currentValue, previousValue) {
+		return fmt.Errorf("tag archive report changed")
+	}
+	return nil
+}
+
+func bindNativeReceipt(root, sha, tree, tag, reportPath, nativePath string, out io.Writer) error {
+	if e := qualificationTagIdentity(root, sha, tree, tag); e != nil {
+		return e
+	}
+	read := func(path string) ([]byte, error) {
+		path = filepath.Clean(path)
+		return readRegular(filepath.Dir(path), filepath.Base(path), maxMetadata)
+	}
+	b, e := read(reportPath)
+	if e != nil {
+		return e
+	}
+	reportSHA := byteHash(b)
+	var report archiveReport
+	if e = decodeExact(b, &report); e != nil {
+		return e
+	}
+	if report.Mode != "local-tag" || report.Commit != sha || report.Tree != tree || report.Tag != tag || report.TagVersion != strings.TrimPrefix(tag, "v") || report.Version != "" || report.Compiler != archiveCompiler || report.Source == nil || len(report.Archives) != 2 {
+		return fmt.Errorf("tag archive report binding mismatch")
+	}
+	if e = revalidateTagArchiveReport(root, sha, tag, &report, b); e != nil {
+		return e
+	}
+	manifest, e := verifySource(root, sha, report.TagVersion, report.Source)
+	if e != nil {
+		return e
+	}
+	if byteHash(manifest) != report.FinalManifestSHA {
+		return fmt.Errorf("tag manifest report mismatch")
+	}
+	b, e = read(nativePath)
+	if e != nil {
+		return e
+	}
+	nativeSHA := byteHash(b)
+	var native nativeValidationReceipt
+	if e = decodeExact(b, &native); e != nil {
+		return e
+	}
+	if native.Schema != 1 || native.Scope != "runtime-identity-version-declared-iac" || native.Verdict != "pass" || native.Target != "linux-amd64" || native.VerifierSHA != "0d41f3050b535e2bc7c1d6a5537ab2a60938e0b49c4c4f12ece1be883762dfc8" || !sumSHA.MatchString(native.ArtifactSHA) || native.ManifestSHA != report.FinalManifestSHA {
+		return fmt.Errorf("native receipt contract mismatch")
+	}
+	b, e = readRegular(root, "dist/artifacts.json", maxMetadata)
+	if e != nil {
+		return e
+	}
+	if byteHash(b) != report.IndexSHA {
+		return fmt.Errorf("artifact index changed since tag verification")
+	}
+	var index []releaseArtifact
+	if e = decodeExact(b, &index); e != nil {
+		return e
+	}
+	count := 0
+	for _, a := range index {
+		if a.Type == "Binary" && a.Internal == 4 && a.OS == "linux" && a.Arch == "amd64" {
+			count++
+			if a.Name != archivePlugin || a.Path != native.Artifact {
+				return fmt.Errorf("native artifact path/index mismatch")
+			}
+		}
+	}
+	if count != 1 {
+		return fmt.Errorf("native artifact index is ambiguous")
+	}
+	data, e := readRegular(root, native.Artifact, maxBinary)
+	if e != nil {
+		return e
+	}
+	if byteHash(data) != native.ArtifactSHA {
+		return fmt.Errorf("native artifact bytes changed")
+	}
+	if _, e = inspectArchiveBinary(data, "linux-amd64", sha, report.TagVersion); e != nil {
+		return e
+	}
+	seen := map[string]bool{}
+	for _, a := range report.Archives {
+		if seen[a.Target] || (a.Target != "linux-amd64" && a.Target != "darwin-arm64") || !sumSHA.MatchString(a.BinarySHA) || !sumSHA.MatchString(a.ArchiveSHA) {
+			return fmt.Errorf("tag archive target report mismatch")
+		}
+		seen[a.Target] = true
+		if a.Target == "linux-amd64" && a.BinarySHA != native.ArtifactSHA {
+			return fmt.Errorf("native artifact/archive digest mismatch")
+		}
+	}
+	if e = qualificationTagIdentity(root, sha, tree, tag); e != nil {
+		return e
+	}
+	// Public validated facts only; no source paths, dependency lists, process
+	// output, environment or linker arguments enter the job log.
+	return json.NewEncoder(out).Encode(struct {
+		Scope             string `json:"scope"`
+		Commit            string `json:"commit"`
+		Tree              string `json:"tree"`
+		Tag               string `json:"tag"`
+		Target            string `json:"target"`
+		BinarySHA         string `json:"binary_sha256"`
+		ManifestSHA       string `json:"manifest_sha256"`
+		VerifierSHA       string `json:"verifier_sha256"`
+		ArchiveReceiptSHA string `json:"archive_receipt_sha256"`
+		NativeReceiptSHA  string `json:"native_receipt_sha256"`
+	}{"local-tag-native-identity-version-declared-iac; no publication or full capability parity", sha, tree, tag, native.Target, native.ArtifactSHA, native.ManifestSHA, native.VerifierSHA, reportSHA, nativeSHA})
+}
+
+func qualificationTagIdentity(root, sha, tree, tag string) error {
+	wanted, e := numericQualificationTag(sha)
+	if e != nil || !fullSHA.MatchString(tree) || tag != wanted {
+		return fmt.Errorf("qualification tag/source mismatch")
+	}
+	for _, key := range []string{"GORELEASER_CURRENT_TAG", "GORELEASER_PREVIOUS_TAG"} {
+		if _, present := os.LookupEnv(key); present {
+			return fmt.Errorf("qualification tag override environment")
+		}
+	}
+	actualTree, e := sourceIdentity(root, sha)
+	if e != nil || actualTree != tree {
+		return fmt.Errorf("qualification source/tree mismatch")
+	}
+	ref := "refs/tags/" + tag
+	b, e := localGit(root, "for-each-ref", "--format=%(refname)%00%(symref)%00%(objectname)%00%(objecttype)", ref)
+	// An exact row requires the fully qualified direct, unsigned/lightweight
+	// commit ref. Annotated, symbolic and prefix-matching extra refs fail.
+	if e != nil || string(b) != ref+"\x00\x00"+sha+"\x00commit\n" {
+		return fmt.Errorf("qualification tag ref mismatch")
+	}
+	b, e = localGit(root, "tag", "--points-at", sha)
+	if e != nil || strings.TrimSpace(string(b)) != tag {
+		return fmt.Errorf("ambiguous qualification tag")
+	}
+	return nil
+}
+
 type boundedOutput struct {
 	b        bytes.Buffer
 	overflow bool
@@ -669,7 +874,10 @@ type archiveReport struct {
 	Compiler           string            `json:"compiler"`
 	Commit             string            `json:"commit"`
 	Tree               string            `json:"tree"`
-	Version            string            `json:"snapshot_version"`
+	Version            string            `json:"snapshot_version,omitempty"`
+	TagVersion         string            `json:"tag_version,omitempty"`
+	Tag                string            `json:"tag,omitempty"`
+	Mode               string            `json:"verification_mode,omitempty"`
 	Source             *sourceState      `json:"original_source"`
 	FinalManifestSHA   string            `json:"final_manifest_sha256"`
 	Archives           []verifiedArchive `json:"archives"`
@@ -739,6 +947,18 @@ func verifyDistInventory(root string, artifacts []releaseArtifact) error {
 }
 
 func verifySnapshot(root, sha string, before *sourceState, extract string) (*archiveReport, error) {
+	return verifyArchives(root, sha, before, extract, "")
+}
+
+func verifyArchives(root, sha string, before *sourceState, extract, tag string) (*archiveReport, error) {
+	if before == nil {
+		return nil, fmt.Errorf("source receipt missing")
+	}
+	if tag != "" {
+		if e := qualificationTagIdentity(root, sha, before.Tree, tag); e != nil {
+			return nil, e
+		}
+	}
 	b, e := readRegular(root, "dist/metadata.json", maxMetadata)
 	if e != nil {
 		return nil, e
@@ -751,8 +971,12 @@ func verifySnapshot(root, sha string, before *sourceState, extract string) (*arc
 	if meta.Project != archivePlugin || meta.Commit != sha || meta.Runtime.OS != runtime.GOOS || meta.Runtime.Arch != runtime.GOARCH {
 		return nil, fmt.Errorf("release metadata source/host mismatch")
 	}
-	if e = checkSnapshotVersion(meta.Version, sha); e != nil {
-		return nil, e
+	if tag == "" {
+		if e = checkSnapshotVersion(meta.Version, sha); e != nil {
+			return nil, e
+		}
+	} else if meta.Tag != tag || meta.Version != strings.TrimPrefix(tag, "v") {
+		return nil, fmt.Errorf("tag metadata version/source mismatch")
 	}
 	manifest, e := verifySource(root, sha, meta.Version, before)
 	if e != nil {
@@ -781,9 +1005,10 @@ func verifySnapshot(root, sha string, before *sourceState, extract string) (*arc
 	seen := map[string]bool{}
 	metadataCount, checksumCount := 0, 0
 	for _, a := range artifacts {
-		// v2.16.0 emits both the enum and its human-readable type. They must
-		// describe the same record, not provide two competing classifications.
-		kind := map[string]int{"Binary": 4, "Archive": 1, "Checksum": 12, "Metadata": 35}[a.Type]
+		// The pinned v2.20.3 engine emits both the enum and its human-readable
+		// type. Metadata is 36 after WingetLocale was added; do not accept the
+		// old v2.16.0 value or conflicting classifications.
+		kind := map[string]int{"Binary": 4, "Archive": 1, "Checksum": 12, "Metadata": 36}[a.Type]
 		if kind == 0 || a.Internal != kind {
 			return nil, fmt.Errorf("artifact wire type mismatch")
 		}
@@ -846,6 +1071,10 @@ func verifySnapshot(root, sha string, before *sourceState, extract string) (*arc
 		}
 	}()
 	report := &archiveReport{Scope: "snapshot archives only; no binary execution or official release acceptance", Compiler: runtime.Version(), Commit: sha, Tree: before.Tree, Version: meta.Version, Source: before, FinalManifestSHA: byteHash(manifest)}
+	if tag != "" {
+		report.Scope = "local synthetic tag-mode archives only; no binary execution or official release acceptance"
+		report.Version, report.TagVersion, report.Tag, report.Mode = "", meta.Version, tag, "local-tag"
+	}
 	report.EffectiveConfig = string(effective)
 	report.EffectiveConfigSHA = byteHash(effective)
 	report.MetadataSHA = metadataSHA
@@ -890,6 +1119,13 @@ func verifySnapshot(root, sha string, before *sourceState, extract string) (*arc
 	if _, e = verifySource(root, sha, meta.Version, before); e != nil {
 		return nil, e
 	}
+	if tag != "" {
+		// Keep this inside the owned extraction cleanup boundary: no success
+		// receipt or leftover output if the source/tag binding has changed.
+		if e = qualificationTagIdentity(root, sha, before.Tree, tag); e != nil {
+			return nil, e
+		}
+	}
 	success = true
 	return report, nil
 }
@@ -912,13 +1148,68 @@ func runArchiveCheck(args []string, out io.Writer) error {
 		return fmt.Errorf("archive verifier requires %s and GOTOOLCHAIN=local", archiveCompiler)
 	}
 	if len(args) < 3 || !fullSHA.MatchString(args[1]) {
-		return fmt.Errorf("usage: check-release-archives capture SHA STATE | verify SHA STATE EXTRACT")
+		return fmt.Errorf("usage: check-release-archives capture SHA STATE | verify SHA STATE EXTRACT | capture-tag SHA TREE TAG STATE | verify-tag SHA TREE TAG STATE EXTRACT | bind-native SHA TREE TAG REPORT NATIVE")
 	}
 	root, e := os.Getwd()
 	if e != nil {
 		return e
 	}
 	switch args[0] {
+	case "bind-native":
+		if len(args) != 6 {
+			return fmt.Errorf("bind-native requires SHA TREE TAG REPORT NATIVE")
+		}
+		return bindNativeReceipt(root, args[1], args[2], args[3], args[4], args[5], out)
+	case "capture-tag":
+		if len(args) != 5 {
+			return fmt.Errorf("capture-tag requires SHA TREE TAG STATE")
+		}
+		if e = qualificationTagIdentity(root, args[1], args[2], args[3]); e != nil {
+			return e
+		}
+		state, e := captureSource(root, args[1])
+		if e != nil {
+			return e
+		}
+		if state.Tree != args[2] {
+			return fmt.Errorf("qualification source/tree mismatch")
+		}
+		if e = qualificationTagIdentity(root, args[1], args[2], args[3]); e != nil {
+			return e
+		}
+		b, e := json.Marshal(tagSourceState{Source: state, Tag: args[3]})
+		if e != nil {
+			return e
+		}
+		if len(b) > maxMetadata {
+			return fmt.Errorf("source receipt limit")
+		}
+		return writeExclusive(args[4], b)
+	case "verify-tag":
+		if len(args) != 6 {
+			return fmt.Errorf("verify-tag requires SHA TREE TAG STATE EXTRACT")
+		}
+		wanted, tagErr := numericQualificationTag(args[1])
+		if tagErr != nil || !fullSHA.MatchString(args[2]) || args[3] != wanted {
+			return fmt.Errorf("qualification tag/source mismatch")
+		}
+		statePath := filepath.Clean(args[4])
+		b, e := readRegular(filepath.Dir(statePath), filepath.Base(statePath), maxMetadata)
+		if e != nil {
+			return e
+		}
+		var state tagSourceState
+		if e = decodeExact(b, &state); e != nil {
+			return e
+		}
+		if state.Source == nil || state.Tag != args[3] || state.Source.Commit != args[1] || state.Source.Tree != args[2] {
+			return fmt.Errorf("tag source receipt mismatch")
+		}
+		report, e := verifyArchives(root, args[1], state.Source, args[5], args[3])
+		if e != nil {
+			return e
+		}
+		return json.NewEncoder(out).Encode(report)
 	case "capture":
 		if len(args) != 3 {
 			return fmt.Errorf("capture arguments")
@@ -964,4 +1255,24 @@ func main() {
 		fmt.Fprintln(os.Stderr, "archive qualification:", e)
 		os.Exit(1)
 	}
+}
+
+// numericQualificationTag is only for unsigned local qualification refs.
+// Encode all160 SHA bits as56/52/52-bit canonical decimal components: the
+// released wfctl v0.78.2 parser accepts three signed64-bit numeric components,
+// but refuses prerelease syntax. Keep these large versions out of releases.
+func numericQualificationTag(sha string) (string, error) {
+	if !regexp.MustCompile(`^[0-9a-f]{40}$`).MatchString(sha) || sha == "0000000000000000000000000000000000000000" {
+		return "", fmt.Errorf("invalid qualification source")
+	}
+	chunks := []string{sha[:14], sha[14:27], sha[27:]}
+	var values [3]uint64
+	for i, chunk := range chunks {
+		n, e := strconv.ParseUint(chunk, 16, 64)
+		if e != nil {
+			return "", fmt.Errorf("invalid qualification source")
+		}
+		values[i] = n
+	}
+	return fmt.Sprintf("v%d.%d.%d", values[0], values[1], values[2]), nil
 }

@@ -26,7 +26,7 @@ jobs:
       - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7
         with:
           distribution: goreleaser
-          version: v2.16.0
+          version: v2.20.3
           install-only: true
       - name: Bind source and immutable inputs before credentials
         id: scratch
@@ -40,22 +40,32 @@ jobs:
           [[ "$PR_HEAD" =~ ^[0-9a-f]{40}$ && "$PR_BASE" =~ ^[0-9a-f]{40}$ ]]
           test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
           test -z "$(git status --porcelain=v1 --untracked-files=all --ignored)"
-          for file in .goreleaser.yaml scripts/check-build-toolchain.go go.mod go.sum scripts/check-release-archives.go scripts/check-release-archives_test.go; do
+          for file in .goreleaser.yaml scripts/check-build-toolchain.go go.mod go.sum scripts/check-release-archives.go scripts/check-release-archives_test.go scripts/check-native-release.go scripts/check-native-release_test.go; do
             test -f "$file" && test ! -L "$file"
           done
           # Update these anchors together only after reviewing the affected bytes.
           sha256sum --check --strict <<'INPUTS'
-          ca7391c22eba7e030ad815c194da6c2ab40869a1936c8b2a2790895de3dd9baa  .goreleaser.yaml
+          8255a10418c3bcf015986e46a0bcf167fedbd80a66b81923d7095fd430653eff  .goreleaser.yaml
           68afa214265e8668c77bdd63db95f60e987d7f7cd82bb3df7d82a25618d4e732  scripts/check-build-toolchain.go
           de865e63ef12058b46d3e1bba849c80213ef2219bcd827b4b8fbdd6b7d363078  go.mod
           97f7baac3309f1b0889b30516fe3dcb581c0ba099130f7904e51d11963f534c4  go.sum
-          fdce18cb82d409b7b3f70a0ed8fb8e28124fb3ee17f5783321249d6fbbad5609  scripts/check-release-archives.go
-          f964d19512034d68ec83a3b5d84209525511948cc6888cce20448ed827178ce6  scripts/check-release-archives_test.go
+          4bab12314beb126e5733dcb147d54b2b11d90eba81aa1ccea4c2463f2e943fd3  scripts/check-release-archives.go
+          d5e31a5c4c9c9ecb5d3a440dffdef0b860ba58984f1c7b8d018b62abc858ce9d  scripts/check-release-archives_test.go
+          83c9c3f02e603e3ef0a9b3318a8be43d9e09483b943137e8169ca12551e3476f  scripts/check-native-release.go
+          a942283a5cd2fad447507261aecfefe45fe9c7e97c75284e0664d18ba5edf472  scripts/check-native-release_test.go
           INPUTS
           test "$(go version)" = 'go version go1.27.4 linux/amd64'
-          goreleaser --version | tee "$RUNNER_TEMP/archive-goreleaser-version.txt"
-          grep -Eq '(^|[[:space:]])v?2[.]16[.]0([[:space:]]|$)' "$RUNNER_TEMP/archive-goreleaser-version.txt"
-          sha256sum "$(command -v go)" "$(command -v goreleaser)"
+          ENGINE_BIN="$(command -v goreleaser)"
+          verify_engine() {
+            case "$ENGINE_BIN" in /*) ;; *) return 1 ;; esac
+            test -f "$ENGINE_BIN" && test ! -L "$ENGINE_BIN" || return 1
+            printf '%s  %s\n' 'd124b61b79baf6d7e2727bb018e7115c045c076df82c13795bb19f9ace4b612d' "$ENGINE_BIN" | shasum -a 256 --check --strict
+          }
+          verify_engine
+          "$ENGINE_BIN" --version | tee "$RUNNER_TEMP/archive-goreleaser-version.txt"
+          grep -Eq '(^|[[:space:]])v?2[.]20[.]3([[:space:]]|$)' "$RUNNER_TEMP/archive-goreleaser-version.txt"
+          sha256sum "$(command -v go)" "$ENGINE_BIN"
+          printf 'engine_bin=%s\n' "$ENGINE_BIN" >> "$GITHUB_OUTPUT"
           printf 'merge=%s head=%s base=%s tree=%s\n' "$EXPECTED_SHA" "$PR_HEAD" "$PR_BASE" "$(git rev-parse 'HEAD^{tree}')"
           root="$(mktemp -d "$RUNNER_TEMP/archive-qualification.XXXXXXXX")"
           mkdir "$root/module-cache" "$root/build-cache" "$root/gopath" "$root/acquire-tmp"
@@ -101,20 +111,23 @@ jobs:
         env:
           OWNED_ROOT: ${{ steps.scratch.outputs.root }}
           EXPECTED_SHA: ${{ github.sha }}
+          ENGINE_BIN: ${{ steps.scratch.outputs.engine_bin }}
         shell: bash --noprofile --norc -euo pipefail {0}
         run: |
           # Actual archives remain on the disposable runner. No upload step.
           sha256sum --check --strict <<'INPUTS'
-          ca7391c22eba7e030ad815c194da6c2ab40869a1936c8b2a2790895de3dd9baa  .goreleaser.yaml
+          8255a10418c3bcf015986e46a0bcf167fedbd80a66b81923d7095fd430653eff  .goreleaser.yaml
           68afa214265e8668c77bdd63db95f60e987d7f7cd82bb3df7d82a25618d4e732  scripts/check-build-toolchain.go
           de865e63ef12058b46d3e1bba849c80213ef2219bcd827b4b8fbdd6b7d363078  go.mod
           97f7baac3309f1b0889b30516fe3dcb581c0ba099130f7904e51d11963f534c4  go.sum
-          fdce18cb82d409b7b3f70a0ed8fb8e28124fb3ee17f5783321249d6fbbad5609  scripts/check-release-archives.go
-          f964d19512034d68ec83a3b5d84209525511948cc6888cce20448ed827178ce6  scripts/check-release-archives_test.go
+          4bab12314beb126e5733dcb147d54b2b11d90eba81aa1ccea4c2463f2e943fd3  scripts/check-release-archives.go
+          d5e31a5c4c9c9ecb5d3a440dffdef0b860ba58984f1c7b8d018b62abc858ce9d  scripts/check-release-archives_test.go
+          83c9c3f02e603e3ef0a9b3318a8be43d9e09483b943137e8169ca12551e3476f  scripts/check-native-release.go
+          a942283a5cd2fad447507261aecfefe45fe9c7e97c75284e0664d18ba5edf472  scripts/check-native-release_test.go
           INPUTS
           home="$(mktemp -d "$OWNED_ROOT/package-home.XXXXXXXX")"
           tmp="$(mktemp -d "$OWNED_ROOT/package-tmp.XXXXXXXX")"
-          tool_path="$(dirname "$(command -v go)"):$(dirname "$(command -v goreleaser)"):/usr/bin:/bin"
+          tool_path="$(dirname "$(command -v go)"):$(dirname "$ENGINE_BIN"):/usr/bin:/bin"
           clean() {
             env -i PATH="$tool_path" HOME="$home" TMPDIR="$tmp" \
               GOTOOLCHAIN=local GOENV=off GOWORK=off GOAUTH=off GOTELEMETRY=off \
@@ -123,16 +136,26 @@ jobs:
               GOFLAGS='-p=1' GOMAXPROCS=2 GOMEMLIMIT=768MiB \
               GOPATH="$OWNED_ROOT/gopath" GOMODCACHE="$OWNED_ROOT/module-cache" GOCACHE="$OWNED_ROOT/build-cache" "$@"
           }
+          verify_engine() {
+            case "$ENGINE_BIN" in /*) ;; *) return 1 ;; esac
+            test -f "$ENGINE_BIN" && test ! -L "$ENGINE_BIN" || return 1
+            printf '%s  %s\n' 'd124b61b79baf6d7e2727bb018e7115c045c076df82c13795bb19f9ace4b612d' "$ENGINE_BIN" | shasum -a 256 --check --strict
+          }
+          checked_engine() {
+            verify_engine || return "$?"
+            clean "$ENGINE_BIN" "$@"
+          }
           clean go run ./scripts/check-build-toolchain.go
           (cd scripts && clean go test -count=1 -timeout=45s check-release-archives.go check-release-archives_test.go)
+          (cd scripts && clean go test -count=1 -timeout=45s check-native-release.go check-native-release_test.go)
           clean go run ./scripts/check-release-archives.go capture "$EXPECTED_SHA" "$OWNED_ROOT/before.json"
-          clean goreleaser check --config=.goreleaser.yaml
-          clean goreleaser release --config=.goreleaser.yaml --snapshot --clean --skip=publish,sign,notarize,sbom,docker,ko --parallelism=1 --timeout=10m
+          checked_engine check --config=.goreleaser.yaml
+          checked_engine release --config=.goreleaser.yaml --snapshot --clean --skip=publish,sign,notarize,sbom,docker,ko --parallelism=1 --timeout=10m
           clean go run ./scripts/check-release-archives.go verify "$EXPECTED_SHA" "$OWNED_ROOT/before.json" "$OWNED_ROOT/extracted"
           clean go run ./scripts/check-build-toolchain.go "$OWNED_ROOT/extracted/linux-amd64/workflow-plugin-compute"
           clean go run ./scripts/check-build-toolchain.go "$OWNED_ROOT/extracted/darwin-arm64/workflow-plugin-compute"
           owned_kib="$(du -sk "$OWNED_ROOT" | cut -f1)"
           dist_kib="$(du -sk dist | cut -f1)"
           test "$((owned_kib + dist_kib))" -lt 4194304
-          # This is snapshot/compiler/archive evidence only. An upcoming gate is
-          # reconciling Release's floating '~> v2' engine before official release.
+          # This is snapshot/compiler/archive evidence only. Official release
+          # still requires authenticated engine bytes and tag-mode qualification.
