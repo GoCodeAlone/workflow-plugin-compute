@@ -39,11 +39,27 @@ jobs:
           chmod 500 "${RUNNER_TEMP}/wfctl-bin/wfctl"
       - name: Validate plugin contract for publish (pre-build)
         run: "${{ runner.temp }}/wfctl-bin/wfctl plugin validate-contract --for-publish --tag ${{ github.ref_name }} ."
-      - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7
-        with:
-          distribution: goreleaser
-          version: v2.20.3
-          install-only: true
+      - name: Acquire authenticated GoReleaser v2.20.3
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: |
+          umask 077
+          for file in scripts/acquire-release-engine.go scripts/install-release-engine.sh; do
+            test -f "$file" && test ! -L "$file"
+          done
+          shasum -a 256 --check --strict <<'ENGINE_INPUTS'
+          3b01467f6689213350af39ec8130eb9fd918531cd981bff4df5387197edd43f1  scripts/acquire-release-engine.go
+          9c1ce84cca15098821f4597fcc7fda12a65bcaffce47e31636f43516f51af083  scripts/install-release-engine.sh
+          ENGINE_INPUTS
+          work="$(mktemp -d "$RUNNER_TEMP/engine-acquire.XXXXXXXX")"
+          mkdir "$work/home" "$work/tmp" "$work/cache" "$work/gopath"
+          go_bin="$(command -v go)"
+          engine_bin="$(env -i PATH="$(dirname "$go_bin"):/usr/bin:/bin" HOME="$work/home" TMPDIR="$work/tmp" \
+            GOTOOLCHAIN=local GO111MODULE=off GOENV=off GOWORK=off GOTELEMETRY=off \
+            GOPROXY=off GOSUMDB=off GOVCS='*:off' GOMAXPROCS=1 GOFLAGS='-p=1' \
+            GOCACHE="$work/cache" GOPATH="$work/gopath" \
+            "$go_bin" run ./scripts/acquire-release-engine.go "$GITHUB_WORKSPACE" "$RUNNER_TEMP")"
+          test -n "$engine_bin"
+          printf '%s\n' "$(dirname "$engine_bin")" >> "$GITHUB_PATH"
       - name: Publish with verified GoReleaser
         shell: bash --noprofile --norc -euo pipefail {0}
         env:

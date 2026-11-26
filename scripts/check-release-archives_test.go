@@ -78,44 +78,36 @@ func TestArchiveWorkflow(t *testing.T) {
 }
 
 func TestArchiveReleaseEngineParity(t *testing.T) {
-	for _, name := range []string{"archive-qualification.yml", "release.yml"} {
-		b, err := os.ReadFile("../.github/workflows/" + name)
-		if err != nil {
-			t.Fatal(err)
+	b, err := os.ReadFile("../.github/workflows/archive-qualification.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(b)
+	for _, tc := range []struct {
+		text  string
+		count int
+	}{
+		{"goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de", 1},
+		{"version: v2.20.3", 1}, {"install-only: true", 1},
+		{"d124b61b79baf6d7e2727bb018e7115c045c076df82c13795bb19f9ace4b612d", 2},
+		{"shasum -a 256 --check --strict", 2},
+		{`test -f "$ENGINE_BIN" && test ! -L "$ENGINE_BIN"`, 2},
+	} {
+		if strings.Count(s, tc.text) != tc.count {
+			t.Errorf("snapshot shared engine contract missing: %s", tc.text)
 		}
-		for _, required := range []string{
-			"goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de",
-			"version: v2.20.3",
-			"d124b61b79baf6d7e2727bb018e7115c045c076df82c13795bb19f9ace4b612d",
-			"shasum -a 256 --check --strict",
-			"test -f \"$ENGINE_BIN\" && test ! -L \"$ENGINE_BIN\"",
-		} {
-			count := 1
-			if name == "release.yml" && required == "shasum -a 256 --check --strict" {
-				// wfctl is authenticated independently too. Bind this assertion
-				// to the engine's exact guard, not a file-wide checksum count.
-				engineGuard := `printf '%s  %s\n' 'd124b61b79baf6d7e2727bb018e7115c045c076df82c13795bb19f9ace4b612d' "$ENGINE_BIN" | shasum -a 256 --check --strict`
-				if strings.Count(string(b), engineGuard) != 1 {
-					t.Error("release must authenticate the exact engine path")
-				}
-				continue
-			}
-			if name == "archive-qualification.yml" && (strings.HasPrefix(required, "d124") || strings.Contains(required, "shasum") || strings.HasPrefix(required, "test -f")) {
-				count = 2 // pre-credential binding and pre-execution recheck
-			}
-			if strings.Count(string(b), required) != count {
-				t.Errorf("%s must pin the shared engine contract: %s", name, required)
-			}
+	}
+	for _, required := range []string{"verify_engine\n          \"$ENGINE_BIN\" --version", "clean \"$ENGINE_BIN\" \"$@\"", "checked_engine check --config", "checked_engine release --config", "ENGINE_BIN: ${{ steps.scratch.outputs.engine_bin }}"} {
+		if !strings.Contains(s, required) {
+			t.Errorf("snapshot engine binding missing: %s", required)
 		}
-		if name == "archive-qualification.yml" {
-			for _, required := range []string{"verify_engine\n          \"$ENGINE_BIN\" --version", "clean \"$ENGINE_BIN\" \"$@\"", "checked_engine check --config", "checked_engine release --config", "ENGINE_BIN: ${{ steps.scratch.outputs.engine_bin }}"} {
-				if !strings.Contains(string(b), required) {
-					t.Errorf("archive engine binding missing: %s", required)
-				}
-			}
-		} else if strings.Contains(string(b), "args: release --clean") || !strings.Contains(string(b), "verify_engine\n          \"$ENGINE_BIN\" release --clean") || !strings.Contains(string(b), "install-only: true") {
-			t.Error("release must install without execution, then verify and use the same absolute engine")
-		}
+	}
+	b, err = os.ReadFile("../.github/workflows/release.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !productionEngineAcquisitionContract(string(b)) {
+		t.Fatal("release archive acquisition/engine guard contract missing")
 	}
 }
 
@@ -1574,5 +1566,69 @@ func TestQualificationRejectsLegacyPrereleaseTag(t *testing.T) {
 	fixtureGit(t, root, "tag", "--no-sign", legacy, sha)
 	if e := qualificationTagIdentity(root, sha, before.Tree, legacy); e == nil {
 		t.Fatal("legacy incompatible qualification tag accepted")
+	}
+}
+
+func TestProductionEngineArchiveAcquisition(t *testing.T) {
+	release, err := os.ReadFile("../.github/workflows/release.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tag, err := os.ReadFile("../.github/workflows/tag-qualification.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(release), "goreleaser/goreleaser-action@") || !strings.Contains(string(release), `"$go_bin" run ./scripts/acquire-release-engine.go "$GITHUB_WORKSPACE" "$RUNNER_TEMP"`) {
+		t.Error("production must use shared archive-authenticated acquisition before extraction")
+	}
+	if !strings.Contains(string(tag), `clean "$go_bin" run ./scripts/acquire-release-engine.go "$GITHUB_WORKSPACE" "$OWNED_ROOT"`) {
+		t.Error("credential-free rehearsal must execute the same acquisition entry point")
+	}
+}
+
+func productionEngineAcquisitionContract(s string) bool {
+	for _, required := range []string{`"$go_bin" run ./scripts/acquire-release-engine.go "$GITHUB_WORKSPACE" "$RUNNER_TEMP"`, "env -i", "GOTOOLCHAIN=local GO111MODULE=off", "GOENV=off GOWORK=off", "GOPROXY=off GOSUMDB=off GOVCS='*:off'", `test -f "$ENGINE_BIN" && test ! -L "$ENGINE_BIN"`, `verify_engine
+          "$ENGINE_BIN" release --clean`, "d124b61b79baf6d7e2727bb018e7115c045c076df82c13795bb19f9ace4b612d", "shasum -a 256 --check --strict", `"$(dirname "$engine_bin")" >> "$GITHUB_PATH"`} {
+		if !strings.Contains(s, required) {
+			return false
+		}
+	}
+	if strings.Contains(s, "goreleaser/goreleaser-action@") || strings.Contains(s, "|| true") {
+		return false
+	}
+	for _, name := range []string{"acquire-release-engine.go", "install-release-engine.sh"} {
+		b, e := os.ReadFile(name)
+		if e != nil {
+			return false
+		}
+		needle := checksumBytes(b) + "  scripts/" + name
+		if strings.Count(s, needle) != 1 || strings.Index(s, needle) > strings.Index(s, `"$go_bin" run ./scripts/acquire-release-engine.go`) {
+			return false
+		}
+	}
+	return true
+}
+func TestProductionEngineAcquisitionRefusals(t *testing.T) {
+	b, e := os.ReadFile("../.github/workflows/release.yml")
+	if e != nil {
+		t.Fatal(e)
+	}
+	s := string(b)
+	for _, tc := range []struct{ name, from, to string }{
+		{"no-shared-entry", "run ./scripts/acquire-release-engine.go", "run ./scripts/other.go"},
+		{"module-acquisition", "GOPROXY=off", "GOPROXY=https://proxy.golang.org"},
+		{"toolchain-auto", "GOTOOLCHAIN=local", "GOTOOLCHAIN=auto"},
+		{"ambient-env", `engine_bin="$(env -i`, `engine_bin="$(env`},
+		{"ignored-errors", `test -n "$engine_bin"`, `test -n "$engine_bin" || true`},
+		{"engine-pin", "d124b61b79baf6d7e2727bb018e7115c045c076df82c13795bb19f9ace4b612d", strings.Repeat("a", 64)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if !strings.Contains(s, tc.from) {
+				t.Fatal("inverse input missing")
+			}
+			if productionEngineAcquisitionContract(strings.ReplaceAll(s, tc.from, tc.to)) {
+				t.Fatal("unsafe acquisition workflow accepted")
+			}
+		})
 	}
 }

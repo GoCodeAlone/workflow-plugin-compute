@@ -50,7 +50,7 @@ jobs:
           de865e63ef12058b46d3e1bba849c80213ef2219bcd827b4b8fbdd6b7d363078  go.mod
           97f7baac3309f1b0889b30516fe3dcb581c0ba099130f7904e51d11963f534c4  go.sum
           4bab12314beb126e5733dcb147d54b2b11d90eba81aa1ccea4c2463f2e943fd3  scripts/check-release-archives.go
-          d5e31a5c4c9c9ecb5d3a440dffdef0b860ba58984f1c7b8d018b62abc858ce9d  scripts/check-release-archives_test.go
+          bee8daea12cb24c539a703178f7bab785a9c1e197f9e4633f959d53804033c7e  scripts/check-release-archives_test.go
           83c9c3f02e603e3ef0a9b3318a8be43d9e09483b943137e8169ca12551e3476f  scripts/check-native-release.go
           a942283a5cd2fad447507261aecfefe45fe9c7e97c75284e0664d18ba5edf472  scripts/check-native-release_test.go
           INPUTS
@@ -121,7 +121,7 @@ jobs:
           de865e63ef12058b46d3e1bba849c80213ef2219bcd827b4b8fbdd6b7d363078  go.mod
           97f7baac3309f1b0889b30516fe3dcb581c0ba099130f7904e51d11963f534c4  go.sum
           4bab12314beb126e5733dcb147d54b2b11d90eba81aa1ccea4c2463f2e943fd3  scripts/check-release-archives.go
-          d5e31a5c4c9c9ecb5d3a440dffdef0b860ba58984f1c7b8d018b62abc858ce9d  scripts/check-release-archives_test.go
+          bee8daea12cb24c539a703178f7bab785a9c1e197f9e4633f959d53804033c7e  scripts/check-release-archives_test.go
           83c9c3f02e603e3ef0a9b3318a8be43d9e09483b943137e8169ca12551e3476f  scripts/check-native-release.go
           a942283a5cd2fad447507261aecfefe45fe9c7e97c75284e0664d18ba5edf472  scripts/check-native-release_test.go
           INPUTS
