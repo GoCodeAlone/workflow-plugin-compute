@@ -43,6 +43,30 @@ type nativeValidationReceipt struct {
 	VerifierSHA string `json:"verifier_sha256"`
 }
 
+// Failure diagnostics are deliberately distinct from an accepted native
+// receipt: fixed facts only, with no paths, child output or error strings.
+type nativeFailureDiagnostic struct {
+	Schema         int    `json:"schema"`
+	Scope          string `json:"scope"`
+	PrimaryPhase   string `json:"primary_phase"`
+	VerifierResult string `json:"verifier_result"`
+	Joined         bool   `json:"joined"`
+	Exit           *int   `json:"exit,omitempty"`
+	Cleanup        string `json:"cleanup"`
+	TmpBytes       *int   `json:"tmpdir_bytes,omitempty"`
+}
+
+func writeNativeFailureDiagnostic(path string, diagnostic nativeFailureDiagnostic) error {
+	b, e := json.Marshal(diagnostic)
+	if e != nil {
+		return e
+	}
+	if len(b) > 512 {
+		return errors.New("native diagnostic exceeded bound")
+	}
+	return writeNativeRecord(path, b)
+}
+
 func nativeReceiptDestination(root, path string) error {
 	if !filepath.IsAbs(path) || filepath.Clean(path) != path || strings.ContainsAny(path, "\x00\r\n") {
 		return errors.New("receipt requires a fresh absolute owned path")
@@ -55,6 +79,18 @@ func nativeReceiptDestination(root, path string) error {
 	if err != nil || !parent.IsDir() || parent.Mode().Perm() != 0700 {
 		return errors.New("receipt parent must be a private owned directory")
 	}
+	canonicalRoot, e := filepath.EvalSymlinks(root)
+	if e != nil {
+		return errors.New("cannot resolve receipt source")
+	}
+	canonicalParent, e := filepath.EvalSymlinks(filepath.Dir(path))
+	if e != nil {
+		return errors.New("cannot resolve receipt parent")
+	}
+	rel, e = filepath.Rel(canonicalRoot, canonicalParent)
+	if e != nil || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))) {
+		return errors.New("receipt must remain outside source")
+	}
 	if _, err = os.Lstat(path); !os.IsNotExist(err) {
 		return errors.New("receipt destination already exists or is unavailable")
 	}
@@ -66,6 +102,10 @@ func writeNativeReceipt(path string, receipt nativeValidationReceipt) error {
 	if err != nil {
 		return err
 	}
+	return writeNativeRecord(path, b)
+}
+
+func writeNativeRecord(path string, b []byte) error {
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {
 		return errors.New("cannot exclusively create native receipt")
@@ -152,11 +192,36 @@ func checkNativeRelease(root string, args []string, opt nativeCheckOptions) (res
 	if err != nil {
 		return "", errors.New("cannot resolve project root")
 	}
+	phase := "artifact"
+	diagnostic := nativeFailureDiagnostic{Schema: 1, Scope: "native-hook-diagnostic", VerifierResult: "not-invoked", Cleanup: "not-created"}
+	if opt.receipt != "" {
+		// Both names must be fresh before installing reporting. Resolve parent
+		// placement so neither receipt can redirect into the source tree.
+		if err = nativeReceiptDestination(root, opt.receipt); err != nil {
+			return "", err
+		}
+		if err = nativeReceiptDestination(root, opt.receipt+".status"); err != nil {
+			return "", err
+		}
+		defer func() {
+			if err == nil {
+				return
+			}
+			if diagnostic.PrimaryPhase == "" {
+				diagnostic.PrimaryPhase = phase
+			}
+			if e := writeNativeFailureDiagnostic(opt.receipt+".status", diagnostic); e != nil {
+				err = errors.Join(err, fmt.Errorf("native diagnostic failed: %w", e))
+				result = ""
+			}
+		}()
+	}
 	artifact, err := nativeArtifactPath(root, args[2])
 	if err != nil {
 		return "", err
 	}
 	manifest := filepath.Join(root, "plugin.json")
+	phase = "tool"
 	if !filepath.IsAbs(opt.tool) || filepath.Clean(opt.tool) != opt.tool {
 		return "", errors.New("WFCTL_BIN must be an absolute verifier path")
 	}
@@ -164,25 +229,36 @@ func checkNativeRelease(root string, args []string, opt nativeCheckOptions) (res
 	if err != nil || toolSHA != opt.digest {
 		return "", errors.New("wfctl authentication failed")
 	}
+	phase = "artifact"
 	artifactSHA, err := nativeDigest(artifact, 128<<20, true)
 	if err != nil {
 		return "", fmt.Errorf("artifact validation failed: %w", err)
 	}
+	phase = "manifest"
 	manifestSHA, err := nativeDigest(manifest, 64<<10, false)
 	if err != nil {
 		return "", fmt.Errorf("manifest validation failed: %w", err)
 	}
+	phase = "receipt-destination"
 	if opt.receipt != "" {
 		if err = nativeReceiptDestination(root, opt.receipt); err != nil {
 			return "", err
 		}
 	}
+	phase = "workspace"
 	owned, err := os.MkdirTemp("", "compute-native-check-")
 	if err != nil {
 		return "", errors.New("cannot create owned verifier directory")
 	}
 	defer func() {
+		// Preserve the primary phase even if cleanup independently fails.
+		diagnostic.PrimaryPhase = "none"
+		if err != nil {
+			diagnostic.PrimaryPhase = phase
+		}
+		diagnostic.Cleanup = "removed"
 		if e := opt.cleanup(owned); e != nil {
+			diagnostic.Cleanup = "failed"
 			err = errors.Join(err, fmt.Errorf("owned verifier cleanup failed: %w", e))
 			result = ""
 		}
@@ -194,6 +270,7 @@ func checkNativeRelease(root string, args []string, opt nativeCheckOptions) (res
 				e = writeNativeReceipt(opt.receipt, nativeValidationReceipt{Schema: 1, Scope: "runtime-identity-version-declared-iac", Verdict: "pass", Target: "linux-amd64", Artifact: filepath.ToSlash(rel), ArtifactSHA: artifactSHA, ManifestSHA: manifestSHA, VerifierSHA: toolSHA})
 			}
 			if e != nil {
+				diagnostic.PrimaryPhase = "receipt"
 				err, result = fmt.Errorf("native receipt failed: %w", e), ""
 			}
 		}
@@ -207,9 +284,25 @@ func checkNativeRelease(root string, args []string, opt nativeCheckOptions) (res
 	cmd.Env = []string{"PATH=/usr/bin:/bin", "HOME=" + home, "TMPDIR=" + tmp, "LANG=C", "LC_ALL=C", "WFCTL_DIFFCACHE=:memory:", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_TERMINAL_PROMPT=0"}
 	// No raw plugin output or inherited stdin: only fixed gate diagnostics.
 	cmd.Stdout, cmd.Stderr = io.Discard, io.Discard
-	if e := opt.run(cmd); e != nil {
-		return "", fmt.Errorf("runtime identity/version/declared-IaC verifier failed: %w", e)
+	phase = "verifier"
+	n := len(tmp)
+	diagnostic.TmpBytes = &n // Exactly the TMPDIR supplied above.
+	runErr := opt.run(cmd)
+	switch {
+	case cmd.ProcessState != nil:
+		diagnostic.VerifierResult = "exited"
+		diagnostic.Joined = true
+		code := cmd.ProcessState.ExitCode()
+		diagnostic.Exit = &code
+	case cmd.Process == nil:
+		diagnostic.VerifierResult = "not-started"
+	default:
+		diagnostic.VerifierResult = "state-unavailable"
 	}
+	if runErr != nil {
+		return "", fmt.Errorf("runtime identity/version/declared-IaC verifier failed: %w", runErr)
+	}
+	phase = "postcheck"
 	for _, input := range []struct {
 		path, before string
 		limit        int64

@@ -48,10 +48,10 @@ jobs:
           97f7baac3309f1b0889b30516fe3dcb581c0ba099130f7904e51d11963f534c4  go.sum
           f7587c98b2032584cc7361e7f68f90f445d4162b3856c2e01f41d61424ff243b  scripts/check-release-archives.go
           6bb5844033c697ed57c44614df06dc0164f5af79c6e02436fd05b4bbae08ff26  scripts/check-release-archives_test.go
-          79508cb83ac4c8512c19e4697bcc615ee7ef35fe011a258e97bf51c9235773c6  scripts/check-native-release.go
-          e6cde44d4d9fe8c72877aa420c70823e238e10281ef34363da0d2861afcc00a3  scripts/check-native-release_test.go
-          9851e70b4561fb13962ba466f78c78d6f2373291b5a747c79b8d2919969f0830  scripts/qualify-tag-archives.go
-          f1d93f6f9ba1f53131a5354f44dd1fde9fe0bc8cac2190dd75d6764764671883  scripts/qualify-tag-archives_test.go
+          84a2952559c853257d714f0f821858941b506469c376454bc5c3b52526a7ab5d  scripts/check-native-release.go
+          0f08ca658f13ce9177092e7d36689dbcb1248d187390ffcd7375fd251948d902  scripts/check-native-release_test.go
+          fe2c2ca977ea7a913e3b7482f9ab185cc0ab89c97b8a273241491bada7ab08b4  scripts/qualify-tag-archives.go
+          fc31789161cef0182eaa3b9fc93a26a1de798df416fed96e079f4179fcbe52e2  scripts/qualify-tag-archives_test.go
           9c1ce84cca15098821f4597fcc7fda12a65bcaffce47e31636f43516f51af083  scripts/install-release-engine.sh
           INPUTS
           root="$(mktemp -d "$RUNNER_TEMP/tag-qualification.XXXXXXXX")"
@@ -142,10 +142,10 @@ jobs:
           97f7baac3309f1b0889b30516fe3dcb581c0ba099130f7904e51d11963f534c4  go.sum
           f7587c98b2032584cc7361e7f68f90f445d4162b3856c2e01f41d61424ff243b  scripts/check-release-archives.go
           6bb5844033c697ed57c44614df06dc0164f5af79c6e02436fd05b4bbae08ff26  scripts/check-release-archives_test.go
-          79508cb83ac4c8512c19e4697bcc615ee7ef35fe011a258e97bf51c9235773c6  scripts/check-native-release.go
-          e6cde44d4d9fe8c72877aa420c70823e238e10281ef34363da0d2861afcc00a3  scripts/check-native-release_test.go
-          9851e70b4561fb13962ba466f78c78d6f2373291b5a747c79b8d2919969f0830  scripts/qualify-tag-archives.go
-          f1d93f6f9ba1f53131a5354f44dd1fde9fe0bc8cac2190dd75d6764764671883  scripts/qualify-tag-archives_test.go
+          84a2952559c853257d714f0f821858941b506469c376454bc5c3b52526a7ab5d  scripts/check-native-release.go
+          0f08ca658f13ce9177092e7d36689dbcb1248d187390ffcd7375fd251948d902  scripts/check-native-release_test.go
+          fe2c2ca977ea7a913e3b7482f9ab185cc0ab89c97b8a273241491bada7ab08b4  scripts/qualify-tag-archives.go
+          fc31789161cef0182eaa3b9fc93a26a1de798df416fed96e079f4179fcbe52e2  scripts/qualify-tag-archives_test.go
           9c1ce84cca15098821f4597fcc7fda12a65bcaffce47e31636f43516f51af083  scripts/install-release-engine.sh
           INPUTS
           mkdir "$OWNED_ROOT/execution-home" "$OWNED_ROOT/execution-tmp"

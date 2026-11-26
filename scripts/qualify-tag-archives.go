@@ -77,14 +77,119 @@ func runTagChild(dir string, env, argv []string) ([]byte, error) {
 	e := cmd.Run()
 	if e != nil {
 		if exit, ok := e.(*exec.ExitError); ok {
-			return nil, fmt.Errorf("qualification subprocess failed (exit %d); output withheld", exit.ExitCode())
+			return nil, fmt.Errorf("qualification subprocess failed (exit %d); output withheld%s", exit.ExitCode(), tagNativeDiagnostic(dir, env))
 		}
-		return nil, errors.New("qualification subprocess could not start; output withheld")
+		return nil, fmt.Errorf("qualification subprocess could not start; output withheld%s", tagNativeDiagnostic(dir, env))
 	}
 	if out.overflow || errout.overflow {
 		return nil, errors.New("qualification subprocess output limit exceeded; output withheld")
 	}
 	return out.Bytes(), nil
+}
+
+// Diagnostic-only wire. It never authorizes an artifact or changes failure.
+type tagNativeStatus struct {
+	Schema         int    `json:"schema"`
+	Scope          string `json:"scope"`
+	PrimaryPhase   string `json:"primary_phase"`
+	VerifierResult string `json:"verifier_result"`
+	Joined         bool   `json:"joined"`
+	Exit           *int   `json:"exit,omitempty"`
+	Cleanup        string `json:"cleanup"`
+	TmpBytes       *int   `json:"tmpdir_bytes,omitempty"`
+}
+
+func tagNativeDiagnostic(source string, env []string) string {
+	receipt := ""
+	count := 0
+	for _, v := range env {
+		if bytes.HasPrefix([]byte(v), []byte("NATIVE_CHECK_RECEIPT=")) {
+			receipt = v[len("NATIVE_CHECK_RECEIPT="):]
+			count++
+		}
+	}
+	if count == 0 {
+		return ""
+	}
+	prefix := `; native diagnostic=`
+	unusable := prefix + `{"observation":"unusable"}`
+	if count != 1 || !filepath.IsAbs(receipt) || filepath.Clean(receipt) != receipt {
+		return unusable
+	}
+	parent := filepath.Dir(receipt)
+	st, e := os.Lstat(parent)
+	if e != nil || !st.IsDir() || st.Mode().Perm() != 0700 {
+		return unusable
+	}
+	resolved, e := filepath.EvalSymlinks(parent)
+	if e != nil {
+		return unusable
+	}
+	canonicalSource, e := filepath.EvalSymlinks(source)
+	if e != nil {
+		return unusable
+	}
+	rel, e := filepath.Rel(canonicalSource, resolved)
+	if e != nil || (rel != ".." && !bytes.HasPrefix([]byte(rel), []byte(".."+string(filepath.Separator)))) {
+		return unusable
+	}
+	path := receipt + ".status"
+	st, e = os.Lstat(path)
+	if os.IsNotExist(e) {
+		return prefix + `{"observation":"not-observed"}`
+	}
+	if e != nil || !st.Mode().IsRegular() || st.Size() <= 0 || st.Size() > 512 {
+		return unusable
+	}
+	f, e := os.Open(path)
+	if e != nil {
+		return unusable
+	}
+	b, e := io.ReadAll(io.LimitReader(f, 513))
+	closeErr := f.Close()
+	if e != nil || closeErr != nil || int64(len(b)) != st.Size() || len(b) > 512 {
+		return unusable
+	}
+	var d tagNativeStatus
+	decoder := json.NewDecoder(bytes.NewReader(b))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&d) != nil {
+		return unusable
+	}
+	canonical, e := json.Marshal(d)
+	if e != nil || !bytes.Equal(bytes.TrimSpace(b), canonical) {
+		return unusable
+	} // Also rejects duplicate keys/trailing data.
+	phases := map[string]bool{"none": true, "artifact": true, "tool": true, "manifest": true, "receipt-destination": true, "workspace": true, "verifier": true, "postcheck": true, "receipt": true}
+	cleanups := map[string]bool{"not-created": true, "removed": true, "failed": true}
+	if d.Schema != 1 || d.Scope != "native-hook-diagnostic" || !phases[d.PrimaryPhase] || !cleanups[d.Cleanup] || (d.PrimaryPhase == "none" && d.Cleanup != "failed") {
+		return unusable
+	}
+	if d.TmpBytes != nil && (*d.TmpBytes <= 0 || *d.TmpBytes > 4096) {
+		return unusable
+	}
+	switch d.VerifierResult {
+	case "not-invoked":
+		if d.Joined || d.Exit != nil || d.TmpBytes != nil {
+			return unusable
+		}
+	case "not-started", "state-unavailable":
+		if d.Joined || d.Exit != nil || d.TmpBytes == nil {
+			return unusable
+		}
+	case "exited":
+		if !d.Joined || d.Exit == nil || *d.Exit < -1 || *d.Exit > 255 || d.TmpBytes == nil {
+			return unusable
+		}
+	default:
+		return unusable
+	}
+	// All values here have been validated against fixed enums/integer bounds.
+	out, _ := json.Marshal(struct {
+		Observation string          `json:"observation"`
+		Facts       tagNativeStatus `json:"facts"`
+	}{"refused", d})
+	return prefix + string(out)
 }
 
 type tagBoundedOutput struct {
@@ -175,7 +280,7 @@ func (q tagQualification) execute(out io.Writer) error {
 			return errors.New("qualification directories missing/redirected")
 		}
 	}
-	for _, name := range []string{"before.json", "native.json", "archives.json", "combined.json"} {
+	for _, name := range []string{"before.json", "native.json", "native.json.status", "archives.json", "combined.json"} {
 		if _, e := os.Lstat(filepath.Join(q.root, name)); !os.IsNotExist(e) {
 			return errors.New("qualification receipts must be fresh")
 		}

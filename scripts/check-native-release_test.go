@@ -396,3 +396,187 @@ func TestNativeReleaseCLI(t *testing.T) {
 		})
 	}
 }
+
+// Real native checker function and, for the verifier cases, a finite harmless
+// shell helper. No wfctl/plugin, sockets or encryption is invoked.
+func TestNativeFailureDiagnostics(t *testing.T) {
+	for _, name := range []string{"tool", "verifier", "verifier-and-cleanup", "cleanup", "postcheck", "receipt", "existing-status"} {
+		t.Run(name, func(t *testing.T) {
+			root, args, opt := nativeFixture(t)
+			dir := t.TempDir()
+			if e := os.Chmod(dir, 0700); e != nil {
+				t.Fatal(e)
+			}
+			opt.receipt = filepath.Join(dir, "native.json")
+			path := opt.receipt + ".status"
+			calls := 0
+			opt.run = func(*exec.Cmd) error { calls++; return nil }
+			cleanupFailure := errors.New("inert-cleanup-private-marker")
+			primary := "tool"
+			cleanup := "not-created"
+			joined := false
+			switch name {
+			case "tool":
+				opt.digest = strings.Repeat("0", 64)
+			case "verifier", "verifier-and-cleanup":
+				if e := os.WriteFile(opt.tool, []byte("#!/bin/sh\nprintf inert-private-output\nprintf inert-private-error >&2\nexit 7\n"), 0700); e != nil {
+					t.Fatal(e)
+				}
+				opt.digest, _ = nativeDigest(opt.tool, 160<<20, true)
+				opt.run = func(c *exec.Cmd) error { calls++; return c.Run() }
+				primary, cleanup, joined = "verifier", "removed", true
+			case "cleanup":
+				primary, cleanup = "none", "failed"
+			case "postcheck":
+				primary, cleanup = "postcheck", "removed"
+				opt.run = func(*exec.Cmd) error {
+					calls++
+					return os.WriteFile(filepath.Join(root, "dist/plugin"), []byte("inert changed artifact"), 0700)
+				}
+			case "receipt":
+				primary, cleanup = "receipt", "removed"
+				opt.run = func(*exec.Cmd) error { calls++; return os.WriteFile(opt.receipt, []byte("preserve inert file"), 0600) }
+			case "existing-status":
+				if e := os.WriteFile(path, []byte("preserve inert status"), 0600); e != nil {
+					t.Fatal(e)
+				}
+			}
+			if name == "cleanup" || name == "verifier-and-cleanup" {
+				if name == "verifier-and-cleanup" {
+					cleanup = "failed"
+				}
+				opt.cleanup = func(p string) error {
+					if e := os.RemoveAll(p); e != nil {
+						return e
+					}
+					return cleanupFailure
+				}
+			}
+			suppliedTmpBytes := 0
+			run := opt.run
+			opt.run = func(c *exec.Cmd) error {
+				for _, v := range c.Env {
+					if strings.HasPrefix(v, "TMPDIR=") {
+						suppliedTmpBytes = len(strings.TrimPrefix(v, "TMPDIR="))
+					}
+				}
+				return run(c)
+			}
+			result, e := checkNativeRelease(root, args, opt)
+			if name == "existing-status" {
+				b, _ := os.ReadFile(path)
+				if e == nil || calls != 0 || string(b) != "preserve inert status" {
+					t.Fatal("preexisting diagnostic did not stop before invocation")
+				}
+				return
+			}
+			if e == nil || result != "" {
+				t.Fatal("failed gate did not fail")
+			}
+			if name == "cleanup" || name == "verifier-and-cleanup" {
+				if !errors.Is(e, cleanupFailure) {
+					t.Fatal("cleanup error identity lost")
+				}
+			}
+			b, readErr := os.ReadFile(path)
+			if readErr != nil {
+				t.Fatalf("fixed failure diagnostic missing: %v", readErr)
+			}
+			if len(b) > 512 || bytes.Contains(b, []byte("private")) || bytes.Contains(b, []byte(root)) || bytes.Contains(b, []byte(opt.tool)) {
+				t.Fatal("diagnostic disclosed raw input/output or exceeded bound")
+			}
+			var d map[string]any
+			if e := json.Unmarshal(b, &d); e != nil {
+				t.Fatal(e)
+			}
+			if d["schema"] != float64(1) || d["scope"] != "native-hook-diagnostic" || d["primary_phase"] != primary || d["cleanup"] != cleanup || d["joined"] != joined {
+				t.Fatalf("incorrect fixed diagnostic facts: %s", b)
+			}
+			if joined {
+				var exited *exec.ExitError
+				if !errors.As(e, &exited) || exited.ExitCode() != 7 {
+					t.Fatal("primary exit identity lost")
+				}
+				if d["exit"] != float64(7) || d["verifier_result"] != "exited" {
+					t.Fatal("actual joined exit missing")
+				}
+			} else if _, ok := d["exit"]; ok {
+				t.Fatal("exit fabricated without completed command state")
+			}
+			if name == "tool" {
+				if _, ok := d["tmpdir_bytes"]; ok {
+					t.Fatal("TMPDIR length fabricated before construction")
+				}
+			} else if n, ok := d["tmpdir_bytes"].(float64); !ok || n != float64(suppliedTmpBytes) || n <= 0 || n > 4096 {
+				t.Fatal("exact child temporary path length missing")
+			}
+			st, statErr := os.Stat(path)
+			if statErr != nil || st.Mode().Perm() != 0600 {
+				t.Fatal("diagnostic file is not private")
+			}
+			if name == "verifier" {
+				t.Logf("NATIVE_DIAGNOSTIC_FIXTURE:%s", b)
+			}
+			if name != "receipt" {
+				if _, e := os.Lstat(opt.receipt); !os.IsNotExist(e) {
+					t.Fatal("failed gate emitted success receipt")
+				}
+			}
+		})
+	}
+}
+
+func TestNativeDiagnosticWriteFailurePreservesPrimary(t *testing.T) {
+	root, args, opt := nativeFixture(t)
+	dir := t.TempDir()
+	if e := os.Chmod(dir, 0700); e != nil {
+		t.Fatal(e)
+	}
+	opt.receipt = filepath.Join(dir, "native.json")
+	if e := os.WriteFile(opt.tool, []byte("#!/bin/sh\nexit 7\n"), 0700); e != nil {
+		t.Fatal(e)
+	}
+	opt.digest, _ = nativeDigest(opt.tool, 160<<20, true)
+	var primaryErr error
+	opt.run = func(c *exec.Cmd) error {
+		if e := os.WriteFile(opt.receipt+".status", []byte("preserve inert record"), 0600); e != nil {
+			t.Fatal(e)
+		}
+		primaryErr = c.Run()
+		return primaryErr
+	}
+	_, e := checkNativeRelease(root, args, opt)
+	var exit *exec.ExitError
+	if primaryErr == nil || !errors.Is(e, primaryErr) || !errors.As(e, &exit) || exit.ExitCode() != 7 || !strings.Contains(e.Error(), "native diagnostic failed") {
+		t.Fatal("diagnostic write failure swallowed primary exit")
+	}
+	b, _ := os.ReadFile(opt.receipt + ".status")
+	if string(b) != "preserve inert record" {
+		t.Fatal("diagnostic overwrote a competing record")
+	}
+	if _, e := os.Lstat(opt.receipt); !os.IsNotExist(e) {
+		t.Fatal("failure emitted accepted receipt")
+	}
+}
+
+func TestNativeReceiptResolvedSourceRefusal(t *testing.T) {
+	root, args, opt := nativeFixture(t)
+	parent := t.TempDir()
+	if e := os.Mkdir(filepath.Join(root, "inside"), 0700); e != nil {
+		t.Fatal(e)
+	}
+	if e := os.Symlink(root, filepath.Join(parent, "owned-alias")); e != nil {
+		t.Fatal(e)
+	}
+	opt.receipt = filepath.Join(parent, "owned-alias", "inside", "native.json")
+	calls := 0
+	opt.run = func(*exec.Cmd) error { calls++; return nil }
+	_, e := checkNativeRelease(root, args, opt)
+	if e == nil || !strings.Contains(e.Error(), "outside source") || calls != 0 {
+		t.Fatal("resolved source-local destination accepted")
+	}
+	entries, e := os.ReadDir(filepath.Join(root, "inside"))
+	if e != nil || len(entries) != 0 {
+		t.Fatal("refused destination changed source")
+	}
+}

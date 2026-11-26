@@ -237,3 +237,134 @@ func TestTagQualificationCLIRefusals(t *testing.T) {
 		})
 	}
 }
+
+// Exercise the real subprocess failure entry boundary with finite harmless
+// exit7 and owned wire fixtures; never execute a release engine.
+func TestTagChildFixedNativeDiagnostics(t *testing.T) {
+	good := `{"schema":1,"scope":"native-hook-diagnostic","primary_phase":"verifier","verifier_result":"exited","joined":true,"exit":7,"cleanup":"removed","tmpdir_bytes":99}`
+	for _, name := range []string{"valid", "missing", "unknown", "malformed", "oversize", "bad-phase", "bad-number", "bad-schema", "bad-cleanup", "bad-result", "bad-joined", "bad-length", "duplicate", "symlink"} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			if e := os.Chmod(dir, 0700); e != nil {
+				t.Fatal(e)
+			}
+			receipt := filepath.Join(dir, "native.json")
+			path := receipt + ".status"
+			wire, want := good, `"observation":"refused"`
+			switch name {
+			case "missing":
+				want = `"observation":"not-observed"`
+			case "unknown":
+				wire = strings.TrimSuffix(good, "}") + `,"inert-private-marker":"inert-private-value"}`
+				want = `"observation":"unusable"`
+			case "malformed":
+				wire = "inert-private-malformed"
+				want = `"observation":"unusable"`
+			case "oversize":
+				wire = strings.Repeat("x", 513)
+				want = `"observation":"unusable"`
+			case "bad-phase":
+				wire = strings.Replace(good, `"primary_phase":"verifier"`, `"primary_phase":"inert-private-phase"`, 1)
+				want = `"observation":"unusable"`
+			case "bad-number":
+				wire = strings.Replace(good, `"exit":7`, `"exit":7.5`, 1)
+				want = `"observation":"unusable"`
+			case "bad-schema":
+				wire = strings.Replace(good, `"schema":1`, `"schema":2`, 1)
+				want = `"observation":"unusable"`
+			case "bad-cleanup":
+				wire = strings.Replace(good, `"cleanup":"removed"`, `"cleanup":"inert-private-cleanup"`, 1)
+				want = `"observation":"unusable"`
+			case "bad-result":
+				wire = strings.Replace(good, `"verifier_result":"exited"`, `"verifier_result":"inert-private-result"`, 1)
+				want = `"observation":"unusable"`
+			case "bad-joined":
+				wire = strings.Replace(good, `"joined":true`, `"joined":false`, 1)
+				want = `"observation":"unusable"`
+			case "bad-length":
+				wire = strings.Replace(good, `"tmpdir_bytes":99`, `"tmpdir_bytes":4097`, 1)
+				want = `"observation":"unusable"`
+			case "duplicate":
+				wire = strings.TrimSuffix(good, "}") + `,"exit":7}`
+				want = `"observation":"unusable"`
+			case "symlink":
+				want = `"observation":"unusable"`
+			}
+			if name != "missing" {
+				dest := path
+				if name == "symlink" {
+					dest = filepath.Join(dir, "inert-target")
+				}
+				if e := os.WriteFile(dest, []byte(wire), 0600); e != nil {
+					t.Fatal(e)
+				}
+				if name == "symlink" {
+					if e := os.Symlink(dest, path); e != nil {
+						t.Fatal(e)
+					}
+				}
+			}
+			_, e := runTagChild(t.TempDir(), []string{"PATH=/usr/bin:/bin", "NATIVE_CHECK_RECEIPT=" + receipt}, []string{"/bin/sh", "-c", "printf inert-private-output; printf inert-private-error >&2; exit 7"})
+			if e == nil || !strings.Contains(e.Error(), "exit 7") || !strings.Contains(e.Error(), want) || strings.Contains(e.Error(), "private") || strings.Contains(e.Error(), dir) {
+				t.Fatalf("fixed diagnostic boundary missing: %v", e)
+			}
+		})
+	}
+}
+
+// Actual native producer function -> its exact wire bytes -> actual driver
+// subprocess-error consumer. Only the verifier is a finite inert shell helper;
+// this is not a release engine/wfctl/plugin invocation or native acceptance.
+func TestTagNativeDiagnosticProducerCrossing(t *testing.T) {
+	argv := []string{filepath.Join(runtime.GOROOT(), "bin/go"), "test", "-v", "-count=1", "-p=1", "-timeout=30s", "-run", "^TestNativeFailureDiagnostics/verifier$", "check-native-release.go", "check-native-release_test.go"}
+	b, e := runTagChild(".", os.Environ(), argv)
+	if e != nil {
+		t.Fatal(e)
+	}
+	var wire string
+	for _, line := range strings.Split(string(b), "\n") {
+		if _, v, ok := strings.Cut(line, "NATIVE_DIAGNOSTIC_FIXTURE:"); ok {
+			if wire != "" {
+				t.Fatal("ambiguous producer fixture")
+			}
+			wire = v
+		}
+	}
+	if wire == "" {
+		t.Fatal("actual native diagnostic producer not observed")
+	}
+	dir := t.TempDir()
+	if e := os.Chmod(dir, 0700); e != nil {
+		t.Fatal(e)
+	}
+	receipt := filepath.Join(dir, "native.json")
+	if e := os.WriteFile(receipt+".status", []byte(wire), 0600); e != nil {
+		t.Fatal(e)
+	}
+	_, e = runTagChild(t.TempDir(), []string{"PATH=/usr/bin:/bin", "NATIVE_CHECK_RECEIPT=" + receipt}, []string{"/bin/sh", "-c", "exit 7"})
+	if e == nil || !strings.Contains(e.Error(), `"observation":"refused"`) || !strings.Contains(e.Error(), `"primary_phase":"verifier"`) || !strings.Contains(e.Error(), `"joined":true`) {
+		t.Fatalf("actual wire did not cross strict consumer: %v", e)
+	}
+}
+
+func TestTagDiagnosticFreshnessBeforeExecution(t *testing.T) {
+	root := t.TempDir()
+	if e := os.Chmod(root, 0700); e != nil {
+		t.Fatal(e)
+	}
+	for _, n := range []string{"execution-home", "execution-tmp", "module-cache", "build-cache", "gopath"} {
+		if e := os.Mkdir(filepath.Join(root, n), 0700); e != nil {
+			t.Fatal(e)
+		}
+	}
+	if e := os.WriteFile(filepath.Join(root, "native.json.status"), []byte("inert preexisting status"), 0600); e != nil {
+		t.Fatal(e)
+	}
+	q := tagQualification{sha: strings.Repeat("1", 40), tree: strings.Repeat("2", 40), root: root, source: root, engine: "/inert/engine", wfctl: "/inert/wfctl", goBin: filepath.Join(runtime.GOROOT(), "bin/go"), run: func(string, []string, []string) ([]byte, error) {
+		t.Fatal("stale diagnostic reached execution")
+		return nil, nil
+	}}
+	if e := q.execute(&bytes.Buffer{}); e == nil || !strings.Contains(e.Error(), "receipts must be fresh") {
+		t.Fatalf("stale diagnostic not refused before execution: %v", e)
+	}
+}
