@@ -6,12 +6,15 @@ package main
 
 import (
 	"bytes"
+	"fmt"
+	"math/big"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -105,7 +108,7 @@ func TestOwnedTagCheckout(t *testing.T) {
 			if tagTestGit(t, source, "tag", "--list") != "" {
 				t.Fatal("original checkout tags mutated")
 			}
-			if got := tagTestGit(t, dest, "tag", "--list"); got != "v0.0.0-qualification.g"+sha {
+			if got := tagTestGit(t, dest, "tag", "--list"); got != qualificationTagReference(t, sha) {
 				t.Fatal("owned qualification tag not exact")
 			}
 			if tagTestGit(t, dest, "rev-parse", "HEAD") != sha || tagTestGit(t, dest, "rev-parse", "HEAD^{tree}") != tree {
@@ -465,5 +468,65 @@ func recordNestedNativeWorkspaces(t *testing.T, b []byte) {
 			t.Fatal("nested producer left its owned native directory")
 		}
 		t.Logf("OWNED_NATIVE_TMP:%s", path)
+	}
+}
+
+func qualificationTagReference(t *testing.T, sha string) string {
+	t.Helper()
+	n, ok := new(big.Int).SetString(sha, 16)
+	if !ok {
+		t.Fatal("reference SHA parse")
+	}
+	mask := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 52), big.NewInt(1))
+	patch := new(big.Int).And(new(big.Int).Set(n), mask)
+	minor := new(big.Int).And(new(big.Int).Rsh(new(big.Int).Set(n), 52), mask)
+	major := new(big.Int).Rsh(new(big.Int).Set(n), 104)
+	return "v" + major.String() + "." + minor.String() + "." + patch.String()
+}
+func TestNumericQualificationTag(t *testing.T) {
+	vectors := []struct{ sha, tag string }{
+		{"0000000000000000000000000008000000000000", "v0.0.2251799813685248"},
+		{"0000000000000000000000000020000000000000", "v0.2.0"},
+		{"0000000000000080000000000000000000000000", "v0.2251799813685248.0"},
+		{"0000000000000200000000000000000000000000", "v2.0.0"},
+
+		{"0000000000000000000000000000000000000001", "v0.0.1"},
+		{"0000000000000000000000000010000000000000", "v0.1.0"},
+		{"0000000000000100000000000000000000000000", "v1.0.0"},
+		{"8000000000000000000000000000000000000000", "v36028797018963968.0.0"},
+		{"ffffffffffffffffffffffffffffffffffffffff", "v72057594037927935.4503599627370495.4503599627370495"},
+		{"672c413c33732d1cad1c57166089e93ecd5dc3c7", "v29040581295698733.504477286229512.2789730733114311"},
+	}
+	for _, tc := range vectors {
+		tag, e := numericQualificationTag(tc.sha)
+		if e != nil || tag != tc.tag || tag != qualificationTagReference(t, tc.sha) {
+			t.Fatal("qualification tag differs from independent full-SHA numeric contract")
+		}
+		parts := strings.Split(strings.TrimPrefix(tag, "v"), ".")
+		if len(parts) != 3 {
+			t.Fatal("numeric qualification tag is not legacy-compatible")
+		}
+		n := new(big.Int)
+		for index, p := range parts {
+			value, e := strconv.ParseUint(p, 10, 63)
+			if e != nil || strconv.FormatUint(value, 10) != p {
+				t.Fatal("component exceeds signed64 or is noncanonical")
+			}
+			if _, e := strconv.Atoi(p); e != nil {
+				t.Fatal("released legacy parser's integer operation rejects component")
+			}
+			if index > 0 {
+				n.Lsh(n, 52)
+			}
+			n.Add(n, new(big.Int).SetUint64(value))
+		}
+		if fmt.Sprintf("%040x", n) != tc.sha {
+			t.Fatal("numeric tag lost or reordered SHA bits")
+		}
+	}
+	for _, bad := range []string{"", strings.Repeat("0", 40), strings.Repeat("A", 40), strings.Repeat("f", 39), strings.Repeat("f", 41), strings.Repeat("g", 40)} {
+		if _, e := numericQualificationTag(bad); e == nil {
+			t.Fatal("invalid or sentinel source accepted")
+		}
 	}
 }

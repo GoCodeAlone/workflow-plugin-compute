@@ -24,6 +24,7 @@ import (
 	"regexp"
 	"runtime"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 )
@@ -531,7 +532,8 @@ func bindNativeReceipt(root, sha, tree, tag, reportPath, nativePath string, out 
 }
 
 func qualificationTagIdentity(root, sha, tree, tag string) error {
-	if !fullSHA.MatchString(sha) || !fullSHA.MatchString(tree) || tag != "v0.0.0-qualification.g"+sha {
+	wanted, e := numericQualificationTag(sha)
+	if e != nil || !fullSHA.MatchString(tree) || tag != wanted {
 		return fmt.Errorf("qualification tag/source mismatch")
 	}
 	for _, key := range []string{"GORELEASER_CURRENT_TAG", "GORELEASER_PREVIOUS_TAG"} {
@@ -1187,7 +1189,8 @@ func runArchiveCheck(args []string, out io.Writer) error {
 		if len(args) != 6 {
 			return fmt.Errorf("verify-tag requires SHA TREE TAG STATE EXTRACT")
 		}
-		if !fullSHA.MatchString(args[2]) || args[3] != "v0.0.0-qualification.g"+args[1] {
+		wanted, tagErr := numericQualificationTag(args[1])
+		if tagErr != nil || !fullSHA.MatchString(args[2]) || args[3] != wanted {
 			return fmt.Errorf("qualification tag/source mismatch")
 		}
 		statePath := filepath.Clean(args[4])
@@ -1252,4 +1255,24 @@ func main() {
 		fmt.Fprintln(os.Stderr, "archive qualification:", e)
 		os.Exit(1)
 	}
+}
+
+// numericQualificationTag is only for unsigned local qualification refs.
+// Encode all160 SHA bits as56/52/52-bit canonical decimal components: the
+// released wfctl v0.78.2 parser accepts three signed64-bit numeric components,
+// but refuses prerelease syntax. Keep these large versions out of releases.
+func numericQualificationTag(sha string) (string, error) {
+	if !regexp.MustCompile(`^[0-9a-f]{40}$`).MatchString(sha) || sha == "0000000000000000000000000000000000000000" {
+		return "", fmt.Errorf("invalid qualification source")
+	}
+	chunks := []string{sha[:14], sha[14:27], sha[27:]}
+	var values [3]uint64
+	for i, chunk := range chunks {
+		n, e := strconv.ParseUint(chunk, 16, 64)
+		if e != nil {
+			return "", fmt.Errorf("invalid qualification source")
+		}
+		values[i] = n
+	}
+	return fmt.Sprintf("v%d.%d.%d", values[0], values[1], values[2]), nil
 }

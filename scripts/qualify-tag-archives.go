@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strconv"
 )
 
 const tagEngineSHA = "d124b61b79baf6d7e2727bb018e7115c045c076df82c13795bb19f9ace4b612d"
@@ -237,6 +238,10 @@ func tagWrite(path string, data []byte) error {
 }
 
 func (q tagQualification) prepareClone() (string, error) {
+	tag, e := numericQualificationTag(q.sha)
+	if e != nil {
+		return "", e
+	}
 	env := q.environment(false)
 	src := filepath.Join(q.root, "source")
 	if _, e := os.Lstat(src); !os.IsNotExist(e) {
@@ -272,7 +277,7 @@ func (q tagQualification) prepareClone() (string, error) {
 	if _, e = q.run(src, env, tagGit(src, "config", "remote.origin.pushurl", "disabled://qualification")); e != nil {
 		return "", e
 	}
-	if _, e = q.run(src, env, tagGit(src, "tag", "--no-sign", "v0.0.0-qualification.g"+q.sha, q.sha)); e != nil {
+	if _, e = q.run(src, env, tagGit(src, "tag", "--no-sign", tag, q.sha)); e != nil {
 		return "", e
 	}
 	return src, nil
@@ -281,6 +286,10 @@ func (q tagQualification) prepareClone() (string, error) {
 func (q tagQualification) execute(out io.Writer) error {
 	if !tagFullSHA.MatchString(q.sha) || !tagFullSHA.MatchString(q.tree) {
 		return errors.New("invalid expected source identity")
+	}
+	tag, e := numericQualificationTag(q.sha)
+	if e != nil {
+		return e
 	}
 	for _, p := range []string{q.root, q.source, q.engine, q.wfctl, q.goBin} {
 		if !filepath.IsAbs(p) || filepath.Clean(p) != p {
@@ -340,7 +349,6 @@ func (q tagQualification) execute(out io.Writer) error {
 	if e != nil {
 		return fmt.Errorf("owned checkout preparation failed: %w", e)
 	}
-	tag := "v0.0.0-qualification.g" + q.sha
 	checker := filepath.Join(src, "scripts/check-release-archives.go")
 	goCheck := func(args ...string) ([]byte, error) {
 		return q.run(src, q.environment(false), append([]string{q.goBin, "run", checker}, args...))
@@ -404,4 +412,24 @@ func main() {
 		fmt.Fprintln(os.Stderr, "tag qualification:", e)
 		os.Exit(1)
 	}
+}
+
+// numericQualificationTag is only for unsigned local qualification refs.
+// Encode all160 SHA bits as56/52/52-bit canonical decimal components: the
+// released wfctl v0.78.2 parser accepts three signed64-bit numeric components,
+// but refuses prerelease syntax. Keep these large versions out of releases.
+func numericQualificationTag(sha string) (string, error) {
+	if !regexp.MustCompile(`^[0-9a-f]{40}$`).MatchString(sha) || sha == "0000000000000000000000000000000000000000" {
+		return "", fmt.Errorf("invalid qualification source")
+	}
+	chunks := []string{sha[:14], sha[14:27], sha[27:]}
+	var values [3]uint64
+	for i, chunk := range chunks {
+		n, e := strconv.ParseUint(chunk, 16, 64)
+		if e != nil {
+			return "", fmt.Errorf("invalid qualification source")
+		}
+		values[i] = n
+	}
+	return fmt.Sprintf("v%d.%d.%d", values[0], values[1], values[2]), nil
 }
