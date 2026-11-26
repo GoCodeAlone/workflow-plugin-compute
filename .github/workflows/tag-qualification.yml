@@ -1,0 +1,172 @@
+name: Tag-mode qualification
+on:
+  pull_request:
+    branches: [main, master]
+permissions:
+  contents: read
+jobs:
+  tag-archives:
+    # Existing same-repo private-dependency read boundary; workflow authors
+    # remain trusted. Execution never inherits the acquisition credentials.
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository
+      && github.repository == 'GoCodeAlone/workflow-plugin-compute'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: '1.27.4'
+          cache: false
+      - name: Bind immutable source and inputs
+        id: scratch
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: |
+          umask 077
+          [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$PR_HEAD" =~ ^[0-9a-f]{40}$ && "$PR_BASE" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test "$(git rev-parse HEAD^1)" = "$PR_BASE"
+          test "$(git rev-parse HEAD^2)" = "$PR_HEAD"
+          test -z "$(git status --porcelain=v1 --untracked-files=all --ignored)"
+          test "$(go version)" = 'go version go1.27.4 linux/amd64'
+          for file in .goreleaser.yaml scripts/check-build-toolchain.go go.mod go.sum scripts/check-release-archives.go scripts/check-release-archives_test.go scripts/check-native-release.go scripts/check-native-release_test.go scripts/qualify-tag-archives.go scripts/qualify-tag-archives_test.go scripts/install-release-engine.sh; do
+            test -f "$file" && test ! -L "$file"
+          done
+          sha256sum --check --strict <<'INPUTS'
+          8255a10418c3bcf015986e46a0bcf167fedbd80a66b81923d7095fd430653eff  .goreleaser.yaml
+          68afa214265e8668c77bdd63db95f60e987d7f7cd82bb3df7d82a25618d4e732  scripts/check-build-toolchain.go
+          de865e63ef12058b46d3e1bba849c80213ef2219bcd827b4b8fbdd6b7d363078  go.mod
+          97f7baac3309f1b0889b30516fe3dcb581c0ba099130f7904e51d11963f534c4  go.sum
+          f7587c98b2032584cc7361e7f68f90f445d4162b3856c2e01f41d61424ff243b  scripts/check-release-archives.go
+          6bb5844033c697ed57c44614df06dc0164f5af79c6e02436fd05b4bbae08ff26  scripts/check-release-archives_test.go
+          79508cb83ac4c8512c19e4697bcc615ee7ef35fe011a258e97bf51c9235773c6  scripts/check-native-release.go
+          e6cde44d4d9fe8c72877aa420c70823e238e10281ef34363da0d2861afcc00a3  scripts/check-native-release_test.go
+          9851e70b4561fb13962ba466f78c78d6f2373291b5a747c79b8d2919969f0830  scripts/qualify-tag-archives.go
+          f1d93f6f9ba1f53131a5354f44dd1fde9fe0bc8cac2190dd75d6764764671883  scripts/qualify-tag-archives_test.go
+          9c1ce84cca15098821f4597fcc7fda12a65bcaffce47e31636f43516f51af083  scripts/install-release-engine.sh
+          INPUTS
+          root="$(mktemp -d "$RUNNER_TEMP/tag-qualification.XXXXXXXX")"
+          mkdir "$root/downloads" "$root/module-cache" "$root/build-cache" "$root/gopath" "$root/acquire-tmp"
+          printf 'root=%s\n' "$root" >> "$GITHUB_OUTPUT"
+          printf 'tree=%s\n' "$(git rev-parse 'HEAD^{tree}')" >> "$GITHUB_OUTPUT"
+      - name: Acquire public tool bytes without executing them
+        env:
+          OWNED_ROOT: ${{ steps.scratch.outputs.root }}
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: |
+          umask 077
+          home="$(mktemp -d "$OWNED_ROOT/download-home.XXXXXXXX")"
+          env -i PATH=/usr/bin:/bin HOME="$home" curl --disable --fail --location --silent --show-error --proto '=https' --tlsv1.2 --max-time 120 --max-filesize 160000000 \
+            --output "$OWNED_ROOT/downloads/engine.tar.gz" \
+            https://github.com/goreleaser/goreleaser/releases/download/v2.20.3/goreleaser_Linux_x86_64.tar.gz
+          env -i PATH=/usr/bin:/bin HOME="$home" curl --disable --fail --location --silent --show-error --proto '=https' --tlsv1.2 --max-time 120 --max-filesize 160000000 \
+            --output "$OWNED_ROOT/downloads/wfctl" \
+            https://github.com/GoCodeAlone/workflow/releases/download/v0.78.2/wfctl-linux-amd64
+          printf '%s  %s\n' 'a36d5d7d07a5e538e052cef2a9f93f1cd4af493cf5a3712b9177c1ebe360f0e7' "$OWNED_ROOT/downloads/engine.tar.gz" | shasum -a 256 --check --strict
+          printf '%s  %s\n' '0d41f3050b535e2bc7c1d6a5537ab2a60938e0b49c4c4f12ece1be883762dfc8' "$OWNED_ROOT/downloads/wfctl" | shasum -a 256 --check --strict
+      - name: Acquire pinned dependencies
+        env:
+          RELEASES_TOKEN: ${{ secrets.RELEASES_TOKEN || github.token }}
+          OWNED_ROOT: ${{ steps.scratch.outputs.root }}
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: |
+          umask 077
+          test -n "$RELEASES_TOKEN"
+          auth="$(mktemp -d "$OWNED_ROOT/auth.XXXXXXXX")"
+          trap 'rm -f -- "$auth/.gitconfig" "$OWNED_ROOT/acquire.stdout" "$OWNED_ROOT/acquire.stderr"' EXIT
+          git config --file "$auth/.gitconfig" url."https://x-access-token:${RELEASES_TOKEN}@github.com/GoCodeAlone/".insteadOf "https://github.com/GoCodeAlone/"
+          go_bin="$(command -v go)"
+          read_deps() {
+            env -i PATH="$(dirname "$go_bin"):/usr/bin:/bin" HOME="$auth" TMPDIR="$OWNED_ROOT/acquire-tmp" \
+              GOTOOLCHAIN=local GOENV=off GOWORK=off GOPACKAGESDRIVER=off CGO_ENABLED=0 \
+              GOFLAGS='-p=1 -mod=readonly' GOTELEMETRY=off GOMAXPROCS=2 GOMEMLIMIT=768MiB \
+              GOPATH="$OWNED_ROOT/gopath" GOMODCACHE="$OWNED_ROOT/module-cache" GOCACHE="$OWNED_ROOT/build-cache" \
+              GOPRIVATE='github.com/GoCodeAlone/*' GONOPROXY='github.com/GoCodeAlone/*' GONOSUMDB='github.com/GoCodeAlone/*' \
+              GOPROXY=https://proxy.golang.org GOSUMDB=sum.golang.org \
+              GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL="$auth/.gitconfig" GIT_TERMINAL_PROMPT=0 GIT_ALLOW_PROTOCOL=https \
+              "$go_bin" "$@"
+          }
+          # Only pinned tool metadata/resolution: no project programs execute here.
+          status=0
+          read_deps mod tidy -diff > "$OWNED_ROOT/acquire.stdout" 2> "$OWNED_ROOT/acquire.stderr" || status="$?"
+          if [ "$status" -ne 0 ]; then
+            echo "::error::pinned dependency tidy failed (exit $status); stopped without fallback; acquisition output withheld"
+            exit "$status"
+          fi
+          status=0
+          read_deps list -deps -test ./... > "$OWNED_ROOT/acquire.stdout" 2> "$OWNED_ROOT/acquire.stderr" || status="$?"
+          if [ "$status" -ne 0 ]; then
+            echo "::error::pinned dependency closure failed (exit $status); stopped without fallback; acquisition output withheld"
+            exit "$status"
+          fi
+          rm -f -- "$auth/.gitconfig"
+          test ! -e "$auth/.gitconfig"
+          rm -f -- "$OWNED_ROOT/acquire.stdout" "$OWNED_ROOT/acquire.stderr"
+          # The token is supplied on stdin, never as a scanner argument. Scan
+          # only this task's owned inputs; matches or scan errors stop execution.
+          set +e
+          printf '%s\n' "$RELEASES_TOKEN" | grep -qrF -f /dev/stdin -- "$OWNED_ROOT" 2>/dev/null
+          scan_status="${PIPESTATUS[1]}"
+          set -e
+          if [ "$scan_status" -ne 1 ]; then
+            echo '::error::credential residue check failed; stopped before project execution'
+            exit 1
+          fi
+          printf 'removed\n' > "$OWNED_ROOT/credentials-removed"
+          test "$(du -sk "$OWNED_ROOT" | cut -f1)" -lt 4194304
+      - name: Execute tag qualification without credentials
+        env:
+          OWNED_ROOT: ${{ steps.scratch.outputs.root }}
+          EXPECTED_SHA: ${{ github.sha }}
+          EXPECTED_TREE: ${{ steps.scratch.outputs.tree }}
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: |
+          umask 077
+          test -f "$OWNED_ROOT/credentials-removed"
+          for file in .goreleaser.yaml scripts/check-build-toolchain.go go.mod go.sum scripts/check-release-archives.go scripts/check-release-archives_test.go scripts/check-native-release.go scripts/check-native-release_test.go scripts/qualify-tag-archives.go scripts/qualify-tag-archives_test.go scripts/install-release-engine.sh; do
+            test -f "$file" && test ! -L "$file"
+          done
+          sha256sum --check --strict <<'INPUTS'
+          8255a10418c3bcf015986e46a0bcf167fedbd80a66b81923d7095fd430653eff  .goreleaser.yaml
+          68afa214265e8668c77bdd63db95f60e987d7f7cd82bb3df7d82a25618d4e732  scripts/check-build-toolchain.go
+          de865e63ef12058b46d3e1bba849c80213ef2219bcd827b4b8fbdd6b7d363078  go.mod
+          97f7baac3309f1b0889b30516fe3dcb581c0ba099130f7904e51d11963f534c4  go.sum
+          f7587c98b2032584cc7361e7f68f90f445d4162b3856c2e01f41d61424ff243b  scripts/check-release-archives.go
+          6bb5844033c697ed57c44614df06dc0164f5af79c6e02436fd05b4bbae08ff26  scripts/check-release-archives_test.go
+          79508cb83ac4c8512c19e4697bcc615ee7ef35fe011a258e97bf51c9235773c6  scripts/check-native-release.go
+          e6cde44d4d9fe8c72877aa420c70823e238e10281ef34363da0d2861afcc00a3  scripts/check-native-release_test.go
+          9851e70b4561fb13962ba466f78c78d6f2373291b5a747c79b8d2919969f0830  scripts/qualify-tag-archives.go
+          f1d93f6f9ba1f53131a5354f44dd1fde9fe0bc8cac2190dd75d6764764671883  scripts/qualify-tag-archives_test.go
+          9c1ce84cca15098821f4597fcc7fda12a65bcaffce47e31636f43516f51af083  scripts/install-release-engine.sh
+          INPUTS
+          mkdir "$OWNED_ROOT/execution-home" "$OWNED_ROOT/execution-tmp"
+          # Repository helpers run only after auth material/logs are removed.
+          env -i PATH=/usr/bin:/bin HOME="$OWNED_ROOT/execution-home" TMPDIR="$OWNED_ROOT/execution-tmp" \
+            bash ./scripts/install-release-engine.sh linux-amd64 "$OWNED_ROOT/downloads/engine.tar.gz" "$OWNED_ROOT/engine"
+          printf '%s  %s\n' '0d41f3050b535e2bc7c1d6a5537ab2a60938e0b49c4c4f12ece1be883762dfc8' "$OWNED_ROOT/downloads/wfctl" | shasum -a 256 --check --strict
+          chmod 500 "$OWNED_ROOT/downloads/wfctl"
+          go_bin="$(command -v go)"
+          clean() {
+            env -i PATH="$(dirname "$go_bin"):/usr/bin:/bin" HOME="$OWNED_ROOT/execution-home" TMPDIR="$OWNED_ROOT/execution-tmp" \
+              LANG=C LC_ALL=C GOTOOLCHAIN=local GOENV=off GOWORK=off GOAUTH=off GOTELEMETRY=off \
+              GOPROXY=off GOSUMDB=off GOVCS='*:off' GOPACKAGESDRIVER=off CGO_ENABLED=0 GOFLAGS='-p=1' GOMAXPROCS=2 GOMEMLIMIT=768MiB \
+              GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0 GIT_ALLOW_PROTOCOL=file GIT_NO_LAZY_FETCH=1 \
+              GOPATH="$OWNED_ROOT/gopath" GOMODCACHE="$OWNED_ROOT/module-cache" GOCACHE="$OWNED_ROOT/build-cache" "$@"
+          }
+          (cd scripts && clean "$go_bin" test -count=1 -timeout=45s check-release-archives.go check-release-archives_test.go)
+          (cd scripts && clean "$go_bin" test -count=1 -timeout=45s check-native-release.go check-native-release_test.go)
+          (cd scripts && clean "$go_bin" test -count=1 -timeout=45s qualify-tag-archives.go qualify-tag-archives_test.go)
+          # Only this fixed driver may invoke the engine in this job. Successful
+          # stdout contains its validated public combined receipt, not raw logs.
+          clean "$go_bin" run ./scripts/qualify-tag-archives.go "$EXPECTED_SHA" "$EXPECTED_TREE" "$OWNED_ROOT" "$GITHUB_WORKSPACE" \
+            "$OWNED_ROOT/engine/goreleaser" "$OWNED_ROOT/downloads/wfctl" "$go_bin"
+          test "$(du -sk "$OWNED_ROOT" | cut -f1)" -lt 4194304

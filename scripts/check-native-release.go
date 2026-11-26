@@ -7,6 +7,7 @@ package main
 
 import (
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -26,8 +27,56 @@ const nativeWfctlSHA = "0d41f3050b535e2bc7c1d6a5537ab2a60938e0b49c4c4f12ece1be88
 // digest and real command/cleanup operations, without a runtime override.
 type nativeCheckOptions struct {
 	host, tool, digest string
+	receipt            string
 	run                func(*exec.Cmd) error
 	cleanup            func(string) error
+}
+
+type nativeValidationReceipt struct {
+	Schema      int    `json:"schema"`
+	Scope       string `json:"scope"`
+	Verdict     string `json:"verdict"`
+	Target      string `json:"target"`
+	Artifact    string `json:"artifact_path"`
+	ArtifactSHA string `json:"artifact_sha256"`
+	ManifestSHA string `json:"manifest_sha256"`
+	VerifierSHA string `json:"verifier_sha256"`
+}
+
+func nativeReceiptDestination(root, path string) error {
+	if !filepath.IsAbs(path) || filepath.Clean(path) != path || strings.ContainsAny(path, "\x00\r\n") {
+		return errors.New("receipt requires a fresh absolute owned path")
+	}
+	rel, err := filepath.Rel(root, path)
+	if err != nil || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))) {
+		return errors.New("receipt must remain outside source")
+	}
+	parent, err := os.Lstat(filepath.Dir(path))
+	if err != nil || !parent.IsDir() || parent.Mode().Perm() != 0700 {
+		return errors.New("receipt parent must be a private owned directory")
+	}
+	if _, err = os.Lstat(path); !os.IsNotExist(err) {
+		return errors.New("receipt destination already exists or is unavailable")
+	}
+	return nil
+}
+
+func writeNativeReceipt(path string, receipt nativeValidationReceipt) error {
+	b, err := json.Marshal(receipt)
+	if err != nil {
+		return err
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		return errors.New("cannot exclusively create native receipt")
+	}
+	_, writeErr := f.Write(b)
+	closeErr := f.Close()
+	if writeErr != nil || closeErr != nil {
+		removeErr := os.Remove(path) // Only the file just created above is owned.
+		return errors.Join(writeErr, closeErr, removeErr)
+	}
+	return nil
 }
 
 func nativeDigest(path string, limit int64, executable bool) (string, error) {
@@ -123,6 +172,11 @@ func checkNativeRelease(root string, args []string, opt nativeCheckOptions) (res
 	if err != nil {
 		return "", fmt.Errorf("manifest validation failed: %w", err)
 	}
+	if opt.receipt != "" {
+		if err = nativeReceiptDestination(root, opt.receipt); err != nil {
+			return "", err
+		}
+	}
 	owned, err := os.MkdirTemp("", "compute-native-check-")
 	if err != nil {
 		return "", errors.New("cannot create owned verifier directory")
@@ -131,6 +185,17 @@ func checkNativeRelease(root string, args []string, opt nativeCheckOptions) (res
 		if e := opt.cleanup(owned); e != nil {
 			err = errors.Join(err, fmt.Errorf("owned verifier cleanup failed: %w", e))
 			result = ""
+		}
+		// A receipt is a success record only after the child joined, every
+		// input remained stable and owned temporary cleanup succeeded.
+		if err == nil && opt.receipt != "" {
+			rel, e := filepath.Rel(root, artifact)
+			if e == nil {
+				e = writeNativeReceipt(opt.receipt, nativeValidationReceipt{Schema: 1, Scope: "runtime-identity-version-declared-iac", Verdict: "pass", Target: "linux-amd64", Artifact: filepath.ToSlash(rel), ArtifactSHA: artifactSHA, ManifestSHA: manifestSHA, VerifierSHA: toolSHA})
+			}
+			if e != nil {
+				err, result = fmt.Errorf("native receipt failed: %w", e), ""
+			}
 		}
 	}()
 	home, tmp := filepath.Join(owned, "home"), filepath.Join(owned, "tmp")
@@ -164,7 +229,8 @@ func main() {
 		var result string
 		result, err = checkNativeRelease(root, os.Args[1:], nativeCheckOptions{
 			host: runtime.GOOS + "/" + runtime.GOARCH, tool: os.Getenv("WFCTL_BIN"), digest: nativeWfctlSHA,
-			run: (*exec.Cmd).Run, cleanup: os.RemoveAll,
+			receipt: os.Getenv("NATIVE_CHECK_RECEIPT"),
+			run:     (*exec.Cmd).Run, cleanup: os.RemoveAll,
 		})
 		if err == nil {
 			fmt.Println(result)

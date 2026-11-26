@@ -405,6 +405,36 @@ func TestNativeReleaseHookContract(t *testing.T) {
 	}
 }
 
+func TestTagPRQualificationWorkflow(t *testing.T) {
+	b, err := os.ReadFile("../.github/workflows/tag-qualification.yml")
+	if err != nil {
+		t.Fatalf("read-only tag qualification execution path missing: %v", err)
+	}
+	s := string(b)
+	for _, required := range []string{"  pull_request:", "  contents: read", "persist-credentials: false", "cache: false", "github.event.pull_request.head.repo.full_name == github.repository", "qualify-tag-archives.go", "Acquire pinned dependencies", "env -i", "GOTOOLCHAIN=local", "GOAUTH=off", "GOPROXY=off", "GOVCS='*:off'", "install-release-engine.sh", "0d41f3050b535e2bc7c1d6a5537ab2a60938e0b49c4c4f12ece1be883762dfc8"} {
+		if !strings.Contains(s, required) {
+			t.Fatalf("tag job contract missing %s", required)
+		}
+	}
+	for _, forbidden := range []string{"contents: write", "pull_request_target:", "workflow_dispatch:", "repository_dispatch:", "  push:", "upload-artifact", "packages:", "id-token:", "goreleaser-action", "--snapshot", "--skip=validate"} {
+		if strings.Contains(s, forbidden) {
+			t.Fatalf("tag job contains forbidden operation %s", forbidden)
+		}
+	}
+	if strings.Count(s, "secrets.RELEASES_TOKEN") != 1 {
+		t.Fatal("tag job changes dependency credential scope")
+	}
+	a, z := strings.Index(s, "      - name: Acquire pinned dependencies"), strings.Index(s, "      - name: Execute tag qualification without credentials")
+	if a < 0 || z <= a {
+		t.Fatal("tag job acquisition/execution boundary missing")
+	}
+	for _, forbidden := range []string{"go run", "go test", "scripts/", "wfctl ", "goreleaser "} {
+		if strings.Contains(s[a:z], forbidden) {
+			t.Fatal("project code executes during credential acquisition")
+		}
+	}
+}
+
 func fixtureGit(t *testing.T, root string, args ...string) string {
 	t.Helper()
 	c := exec.Command("git", append([]string{"-C", root, "-c", "core.hooksPath=/dev/null", "-c", "user.name=ArchiveFixture", "-c", "user.email=fixture@example.invalid"}, args...)...)
@@ -680,6 +710,390 @@ func TestCaptureRawSource(t *testing.T) {
 	}
 }
 
+func TestTagModeCaptureCLI(t *testing.T) {
+	root, sha, before := newSourceFixture(t)
+	tag := "v0.0.0-qualification.g" + sha
+	// This is an unsigned, disposable local ref; no signing or remote operation.
+	fixtureGit(t, root, "tag", "--no-sign", tag, sha)
+	script, e := filepath.Abs("check-release-archives.go")
+	if e != nil {
+		t.Fatal(e)
+	}
+	state := filepath.Join(t.TempDir(), "tag-source.json")
+	fixtureTool(t, root, []string{"GO111MODULE=off"}, "run", script, "capture-tag", sha, before.Tree, tag, state)
+	b, e := os.ReadFile(state)
+	if e != nil {
+		t.Fatal(e)
+	}
+	var receipt struct {
+		Source *sourceState `json:"source"`
+		Tag    string       `json:"tag"`
+	}
+	if e = decodeExact(b, &receipt); e != nil || receipt.Source == nil || receipt.Tag != tag || receipt.Source.Commit != sha || receipt.Source.Tree != before.Tree || !bytes.Equal(receipt.Source.Manifest, before.Manifest) {
+		t.Fatalf("actual tag capture did not bind exact source/tree/tag/raw manifest: %v", e)
+	}
+}
+
+// Tag-mode verifier proof uses genuine local Git tags and compiler metadata,
+// not an engine invocation, native plugin execution or publication.
+func TestTagModeArchiveCLI(t *testing.T) {
+	root, sha, before := newSourceFixture(t)
+	tag := "v0.0.0-qualification.g" + sha
+	version := strings.TrimPrefix(tag, "v")
+	fixtureGit(t, root, "tag", "--no-sign", tag, sha)
+	script, e := filepath.Abs("check-release-archives.go")
+	if e != nil {
+		t.Fatal(e)
+	}
+	owned := t.TempDir()
+	state, legacy := filepath.Join(owned, "tag-state.json"), filepath.Join(owned, "snapshot-state.json")
+	fixtureTool(t, root, []string{"GO111MODULE=off"}, "run", script, "capture-tag", sha, before.Tree, tag, state)
+	fixtureTool(t, root, []string{"GO111MODULE=off"}, "run", script, "capture", sha, legacy)
+	manifest := bytes.Replace(before.Manifest, []byte("0.1.10"), []byte(version), 1)
+	writeFixture(t, filepath.Join(root, "plugin.json"), manifest)
+	var artifacts []releaseArtifact
+	checksums := ""
+	binaries, packed := map[string][]byte{}, map[string][]byte{}
+	for _, target := range targets {
+		parts := strings.Split(target, "-")
+		rel := "dist/" + target + "/" + archivePlugin
+		bin := filepath.Join(root, filepath.FromSlash(rel))
+		fixtureTool(t, root, []string{"GOOS=" + parts[0], "GOARCH=" + parts[1]}, "build", "-p=1", "-mod=readonly", "-buildvcs=true", "-ldflags=-s -w -X "+archiveModule+"/internal.Version="+version, "-o", bin, "./cmd/workflow-plugin-compute")
+		binaries[target], e = os.ReadFile(bin)
+		if e != nil {
+			t.Fatal(e)
+		}
+		packed[target] = packFixture(t, binaries[target], manifest)
+		writeFixture(t, filepath.Join(root, "dist", archiveName(target)), packed[target])
+		checksums += checksumBytes(packed[target]) + "  " + archiveName(target) + "\n"
+		artifacts = append(artifacts, releaseArtifact{Name: archivePlugin, Path: rel, OS: parts[0], Arch: parts[1], Type: "Binary", Internal: 4}, releaseArtifact{Name: archiveName(target), Path: "dist/" + archiveName(target), OS: parts[0], Arch: parts[1], Type: "Archive", Internal: 1})
+	}
+	meta := releaseMetadata{Project: archivePlugin, Tag: tag, Version: version, Commit: sha, Date: "2000-01-01T00:00:00Z"}
+	meta.Runtime.OS, meta.Runtime.Arch = runtime.GOOS, runtime.GOARCH
+	metadata, _ := json.Marshal(meta)
+	writeFixture(t, filepath.Join(root, "dist/metadata.json"), metadata)
+	writeFixture(t, filepath.Join(root, "dist/config.yaml"), []byte("# Synthetic tag-mode fixture; no engine invocation.\nversion: 2\n"))
+	writeFixture(t, filepath.Join(root, "dist/checksums.txt"), []byte(checksums))
+	artifacts = append(artifacts, releaseArtifact{Name: "checksums.txt", Path: "dist/checksums.txt", Type: "Checksum", Internal: 12}, releaseArtifact{Name: "metadata.json", Path: "dist/metadata.json", Type: "Metadata", Internal: 36})
+	index, _ := json.Marshal(artifacts)
+	writeFixture(t, filepath.Join(root, "dist/artifacts.json"), index)
+	verifyArgs := []string{"verify-tag", sha, before.Tree, tag, state}
+	output := fixtureTool(t, root, []string{"GO111MODULE=off"}, append([]string{"run", script}, append(append([]string{}, verifyArgs...), filepath.Join(owned, "extracted"))...)...)
+	var report archiveReport
+	if e = decodeExact(output, &report); e != nil || report.Tree != before.Tree || report.Commit != sha || len(report.Archives) != 2 {
+		t.Fatalf("tag-mode CLI rejected genuine synthetic binding: %v", e)
+	}
+	var envelope map[string]json.RawMessage
+	if e = json.Unmarshal(output, &envelope); e != nil {
+		t.Fatal(e)
+	}
+	for key, want := range map[string]string{"tag": tag, "tag_version": version, "verification_mode": "local-tag"} {
+		var got string
+		if e = json.Unmarshal(envelope[key], &got); e != nil || got != want {
+			t.Fatalf("tag report field %s not bound", key)
+		}
+	}
+	if _, ok := envelope["snapshot_version"]; ok {
+		t.Fatal("tag report was mislabeled snapshot")
+	}
+	for _, a := range report.Archives {
+		if a.BinarySHA != checksumBytes(binaries[a.Target]) {
+			t.Fatal("tag-mode binary hash not bound to compiled artifact")
+		}
+	}
+
+	reject := func(t *testing.T, name string, args, env []string, diagnostic string) {
+		t.Helper()
+		extract := filepath.Join(owned, "refusal-"+name)
+		argv := append([]string{"run", script}, append(append([]string{}, args...), extract)...)
+		cmd := exec.Command(filepath.Join(runtime.GOROOT(), "bin/go"), argv...)
+		cmd.Dir = root
+		cmd.Env = append(os.Environ(), append([]string{"GO111MODULE=off", "GOTOOLCHAIN=local", "GOWORK=off", "GOENV=off", "GOPROXY=off", "GOSUMDB=off", "GOVCS=*:off", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null"}, env...)...)
+		var out, errout boundedOutput
+		cmd.Stdout, cmd.Stderr = &out, &errout
+		err := cmd.Run()
+		exit, ok := err.(*exec.ExitError)
+		if !ok || exit.ExitCode() != 1 || out.b.Len() != 0 || out.overflow || errout.overflow || !strings.Contains(errout.b.String(), diagnostic) {
+			t.Fatalf("actual tag-mode refusal %s missing: %v %q", name, err, errout.b.String())
+		}
+		if _, e := os.Lstat(extract); !os.IsNotExist(e) {
+			t.Fatal("tag refusal left extraction output")
+		}
+	}
+	for _, name := range []string{"wrong-tree", "wrong-tag", "legacy-receipt", "nil-source", "wrong-receipt-tag", "snapshot-command", "current-tag-env", "previous-tag-env"} {
+		t.Run(name, func(t *testing.T) {
+			args := append([]string{}, verifyArgs...)
+			env := []string{}
+			want := "tag source receipt mismatch"
+			switch name {
+			case "wrong-tree":
+				args[2] = strings.Repeat("0", 40)
+			case "wrong-tag":
+				args[3] = tag + ".extra"
+				want = "qualification tag/source mismatch"
+			case "legacy-receipt":
+				args[4] = legacy
+				want = "unknown field"
+			case "nil-source", "wrong-receipt-tag":
+				b, e := os.ReadFile(state)
+				if e != nil {
+					t.Fatal(e)
+				}
+				var bad map[string]json.RawMessage
+				if e = json.Unmarshal(b, &bad); e != nil {
+					t.Fatal(e)
+				}
+				if name == "nil-source" {
+					bad["source"] = json.RawMessage("null")
+				} else {
+					bad["tag"], _ = json.Marshal(tag + ".extra")
+				}
+				b, e = json.Marshal(bad)
+				if e != nil {
+					t.Fatal(e)
+				}
+				args[4] = filepath.Join(owned, name+".json")
+				writeFixture(t, args[4], b)
+			case "snapshot-command":
+				args = []string{"verify", sha, state}
+				want = "unknown field"
+			case "current-tag-env":
+				env = []string{"GORELEASER_CURRENT_TAG="}
+				want = "qualification tag override environment"
+			case "previous-tag-env":
+				env = []string{"GORELEASER_PREVIOUS_TAG="}
+				want = "qualification tag override environment"
+			}
+			reject(t, name, args, env, want)
+		})
+	}
+	ref := "refs/tags/" + tag
+	t.Run("missing-ref", func(t *testing.T) {
+		fixtureGit(t, root, "update-ref", "-d", ref, sha)
+		defer fixtureGit(t, root, "tag", "--no-sign", tag, sha)
+		reject(t, "missing-ref", verifyArgs, nil, "qualification tag ref mismatch")
+	})
+	t.Run("moved-ref", func(t *testing.T) {
+		other := fixtureGit(t, root, "commit-tree", before.Tree, "-p", sha, "-m", "inert other commit")
+		fixtureGit(t, root, "update-ref", ref, other, sha)
+		defer fixtureGit(t, root, "update-ref", ref, sha, other)
+		reject(t, "moved-ref", verifyArgs, nil, "qualification tag ref mismatch")
+	})
+	t.Run("annotated-ref", func(t *testing.T) {
+		fixtureGit(t, root, "update-ref", "-d", ref, sha)
+		fixtureGit(t, root, "tag", "--no-sign", "-a", tag, "-m", "inert annotation", sha)
+		defer func() { fixtureGit(t, root, "tag", "-d", tag); fixtureGit(t, root, "tag", "--no-sign", tag, sha) }()
+		reject(t, "annotated-ref", verifyArgs, nil, "qualification tag ref mismatch")
+	})
+	t.Run("symbolic-ref", func(t *testing.T) {
+		fixtureGit(t, root, "symbolic-ref", ref, "refs/heads/main")
+		defer func() {
+			fixtureGit(t, root, "symbolic-ref", "--delete", ref)
+			fixtureGit(t, root, "tag", "--no-sign", tag, sha)
+		}()
+		reject(t, "symbolic-ref", verifyArgs, nil, "qualification tag ref mismatch")
+	})
+	t.Run("extra-annotated-ref", func(t *testing.T) {
+		extra := tag + ".extra"
+		fixtureGit(t, root, "tag", "--no-sign", "-a", extra, "-m", "inert additional annotation", sha)
+		defer fixtureGit(t, root, "tag", "-d", extra)
+		reject(t, "extra-annotated-ref", verifyArgs, nil, "ambiguous qualification tag")
+	})
+	for _, name := range []string{"metadata-tag", "metadata-snapshot-version", "checksum", "wire-type", "extra-output"} {
+		t.Run(name, func(t *testing.T) {
+			want := "tag metadata version/source mismatch"
+			switch name {
+			case "metadata-tag", "metadata-snapshot-version":
+				bad := meta
+				if name == "metadata-tag" {
+					bad.Tag = tag + ".extra"
+				} else {
+					bad.Version = "0.1.15-SNAPSHOT-" + sha[:7]
+				}
+				b, _ := json.Marshal(bad)
+				writeFixture(t, filepath.Join(root, "dist/metadata.json"), b)
+				defer writeFixture(t, filepath.Join(root, "dist/metadata.json"), metadata)
+			case "checksum":
+				writeFixture(t, filepath.Join(root, "dist/checksums.txt"), []byte(strings.Repeat("0", 64)+checksums[64:]))
+				defer writeFixture(t, filepath.Join(root, "dist/checksums.txt"), []byte(checksums))
+				want = "archive checksum mismatch"
+			case "wire-type":
+				bad := append([]releaseArtifact{}, artifacts...)
+				bad[len(bad)-1].Internal = 35
+				b, _ := json.Marshal(bad)
+				writeFixture(t, filepath.Join(root, "dist/artifacts.json"), b)
+				defer writeFixture(t, filepath.Join(root, "dist/artifacts.json"), index)
+				want = "artifact wire type mismatch"
+			case "extra-output":
+				p := filepath.Join(root, "dist/unlisted")
+				writeFixture(t, p, []byte("inert"))
+				defer os.Remove(p)
+				want = "unindexed or nonregular dist output"
+			}
+			reject(t, name, verifyArgs, nil, want)
+		})
+	}
+	t.Run("native-receipt-binding-synthetic-facts", func(t *testing.T) {
+		// Only receipt-consumer proof. These synthetic success facts do not
+		// establish a wfctl/plugin invocation; hosted CI must produce them.
+		reportPath, nativePath := filepath.Join(owned, "tag-report.json"), filepath.Join(owned, "native-facts.json")
+		writeFixture(t, reportPath, output)
+		native := nativeValidationReceipt{Schema: 1, Scope: "runtime-identity-version-declared-iac", Verdict: "pass", Target: "linux-amd64", Artifact: "dist/linux-amd64/" + archivePlugin, ArtifactSHA: checksumBytes(binaries["linux-amd64"]), ManifestSHA: checksumBytes(manifest), VerifierSHA: "0d41f3050b535e2bc7c1d6a5537ab2a60938e0b49c4c4f12ece1be883762dfc8"}
+		good, _ := json.Marshal(native)
+		writeFixture(t, nativePath, good)
+		args := []string{"run", script, "bind-native", sha, before.Tree, tag, reportPath, nativePath}
+		bound := fixtureTool(t, root, []string{"GO111MODULE=off"}, args...)
+		var facts map[string]json.RawMessage
+		if e := json.Unmarshal(bound, &facts); e != nil {
+			t.Fatal(e)
+		}
+		for key, want := range map[string]string{"binary_sha256": native.ArtifactSHA, "manifest_sha256": native.ManifestSHA, "verifier_sha256": native.VerifierSHA, "archive_receipt_sha256": checksumBytes(output), "native_receipt_sha256": checksumBytes(good)} {
+			var got string
+			if e := json.Unmarshal(facts[key], &got); e != nil || got != want {
+				t.Fatalf("combined receipt %s not bound", key)
+			}
+		}
+		for _, name := range []string{"scope", "verdict", "schema", "tool", "artifact", "manifest", "binary", "unknown"} {
+			t.Run(name, func(t *testing.T) {
+				var bad map[string]any
+				if e := json.Unmarshal(good, &bad); e != nil {
+					t.Fatal(e)
+				}
+				want := "native receipt contract mismatch"
+				switch name {
+				case "scope":
+					bad["scope"] = "full-capability-parity"
+				case "verdict":
+					bad["verdict"] = "fail"
+				case "schema":
+					bad["schema"] = 2
+				case "tool":
+					bad["verifier_sha256"] = strings.Repeat("0", 64)
+				case "artifact":
+					bad["artifact_path"] = "dist/darwin-arm64/" + archivePlugin
+					want = "native artifact path/index mismatch"
+				case "manifest":
+					bad["manifest_sha256"] = strings.Repeat("0", 64)
+				case "binary":
+					bad["artifact_sha256"] = strings.Repeat("0", 64)
+					want = "native artifact bytes changed"
+				case "unknown":
+					bad["unrecognized_private_marker"] = true
+					want = "unknown field"
+				}
+				b, _ := json.Marshal(bad)
+				writeFixture(t, nativePath, b)
+				defer writeFixture(t, nativePath, good)
+				cmd := exec.Command(filepath.Join(runtime.GOROOT(), "bin/go"), args...)
+				cmd.Dir = root
+				cmd.Env = append(os.Environ(), "GO111MODULE=off", "GOTOOLCHAIN=local", "GOWORK=off", "GOENV=off", "GOPROXY=off", "GOSUMDB=off", "GOVCS=*:off")
+				var out, errout boundedOutput
+				cmd.Stdout, cmd.Stderr = &out, &errout
+				e := cmd.Run()
+				exit, ok := e.(*exec.ExitError)
+				if !ok || exit.ExitCode() != 1 || out.b.Len() != 0 || out.overflow || errout.overflow || !strings.Contains(errout.b.String(), want) {
+					t.Fatalf("binder refusal %s missing: %v %q", name, e, errout.b.String())
+				}
+			})
+		}
+
+		for _, name := range []string{"report-extra-dependency", "report-extra-main-version", "report-extra-setting"} {
+			t.Run(name, func(t *testing.T) {
+				var raw map[string]any
+				if e := json.Unmarshal(output, &raw); e != nil {
+					t.Fatal(e)
+				}
+				info := raw["archives"].([]any)[0].(map[string]any)["build_info"].(map[string]any)
+				switch name {
+				case "report-extra-dependency":
+					info["Deps"] = []any{map[string]any{"Path": "inert-extra-module"}}
+				case "report-extra-main-version":
+					info["Main"].(map[string]any)["Version"] = "inert-extra-version"
+				case "report-extra-setting":
+					info["Settings"] = append(info["Settings"].([]any), map[string]any{"Key": "inert-extra-setting", "Value": "inert-extra-value"})
+				}
+				b, _ := json.Marshal(raw)
+				writeFixture(t, reportPath, b)
+				defer writeFixture(t, reportPath, output)
+				cmd := exec.Command(filepath.Join(runtime.GOROOT(), "bin/go"), args...)
+				cmd.Dir = root
+				cmd.Env = append(os.Environ(), "GO111MODULE=off", "GOTOOLCHAIN=local", "GOWORK=off", "GOENV=off", "GOPROXY=off", "GOSUMDB=off", "GOVCS=*:off")
+				var out, errout boundedOutput
+				cmd.Stdout, cmd.Stderr = &out, &errout
+				e := cmd.Run()
+				exit, ok := e.(*exec.ExitError)
+				if !ok || exit.ExitCode() != 1 || out.b.Len() != 0 || out.overflow || errout.overflow || !strings.Contains(errout.b.String(), "tag archive report changed") {
+					t.Fatalf("raw report difference was lost: %v %q", e, errout.b.String())
+				}
+			})
+		}
+
+		for _, name := range []string{"stale-linux-archive", "stale-darwin-archive", "missing-linux-archive", "missing-darwin-archive", "changed-metadata", "changed-checksum-order", "changed-effective-config", "unindexed-output"} {
+			t.Run(name, func(t *testing.T) {
+				path := "dist/" + archiveName("linux-amd64")
+				want := "tag archive revalidation failed"
+				switch name {
+				case "stale-darwin-archive", "missing-darwin-archive":
+					path = "dist/" + archiveName("darwin-arm64")
+				case "changed-metadata":
+					path, want = "dist/metadata.json", "tag archive report changed"
+				case "changed-checksum-order":
+					path, want = "dist/checksums.txt", "tag archive report changed"
+				case "changed-effective-config":
+					path, want = "dist/config.yaml", "tag archive report changed"
+				case "unindexed-output":
+					path = "dist/unindexed-inert"
+				}
+				p := filepath.Join(root, path)
+				original, e := os.ReadFile(p)
+				if name == "unindexed-output" {
+					if !os.IsNotExist(e) {
+						t.Fatal("unexpected preexisting fixture output")
+					}
+					writeFixture(t, p, []byte("inert extra output"))
+					defer os.Remove(p)
+				} else {
+					if e != nil {
+						t.Fatal(e)
+					}
+					defer writeFixture(t, p, original)
+					switch name {
+					case "missing-linux-archive", "missing-darwin-archive":
+						if e := os.Remove(p); e != nil {
+							t.Fatal(e)
+						}
+					case "changed-metadata":
+						var m map[string]any
+						if e := json.Unmarshal(original, &m); e != nil {
+							t.Fatal(e)
+						}
+						m["date"] = "2000-01-02T00:00:00Z"
+						b, _ := json.Marshal(m)
+						writeFixture(t, p, b)
+					case "changed-checksum-order":
+						lines := strings.Split(string(original), "\n")
+						writeFixture(t, p, []byte(lines[1]+"\n"+lines[0]+"\n"))
+					default:
+						writeFixture(t, p, append(append([]byte(nil), original...), '\n'))
+					}
+				}
+				cmd := exec.Command(filepath.Join(runtime.GOROOT(), "bin/go"), args...)
+				cmd.Dir = root
+				cmd.Env = append(os.Environ(), "GO111MODULE=off", "GOTOOLCHAIN=local", "GOWORK=off", "GOENV=off", "GOPROXY=off", "GOSUMDB=off", "GOVCS=*:off")
+				var out, errout boundedOutput
+				cmd.Stdout, cmd.Stderr = &out, &errout
+				e = cmd.Run()
+				exit, ok := e.(*exec.ExitError)
+				if !ok || exit.ExitCode() != 1 || out.b.Len() != 0 || out.overflow || errout.overflow || !strings.Contains(errout.b.String(), want) {
+					t.Fatalf("stale physical-output binder refusal %s missing: %v %q", name, e, errout.b.String())
+				}
+			})
+		}
+
+	})
+	t.Logf("local synthetic tag=%s source=%s tree=%s; real compiler/archive bytes; no engine or plugin execution", tag, sha, before.Tree)
+}
+
 func TestJSONAndPathRefusals(t *testing.T) {
 	for _, b := range []string{`{"x":1,"x":2}`, `{"x":{"y":1,"y":2}}`, `{} {}`, `[`, strings.Repeat("[", 34) + strings.Repeat("]", 34)} {
 		if _, e := jsonValue([]byte(b)); e == nil {
@@ -872,6 +1286,21 @@ func TestRealArchiveProvenance(t *testing.T) {
 	if e = decodeExact(output, &report); e != nil || len(report.Archives) != 2 || report.Commit != sha {
 		t.Fatalf("actual CLI refused synthetic producer bytes: %v", e)
 	}
+	t.Run("legacy-snapshot-report-shape", func(t *testing.T) {
+		var fields map[string]json.RawMessage
+		if e := json.Unmarshal(output, &fields); e != nil {
+			t.Fatal(e)
+		}
+		var got string
+		if e := json.Unmarshal(fields["snapshot_version"], &got); e != nil || got != version {
+			t.Fatal("legacy snapshot version wire field changed")
+		}
+		for _, key := range []string{"tag", "tag_version", "verification_mode"} {
+			if _, ok := fields[key]; ok {
+				t.Fatal("tag fields leaked into legacy snapshot report")
+			}
+		}
+	})
 	for _, tc := range []struct {
 		name, diagnostic string
 		mutate           func(map[string]any)
@@ -1051,4 +1480,28 @@ func TestRealArchiveProvenance(t *testing.T) {
 		t.Fatal(e)
 	}
 	t.Logf("synthetic source=%s tree=%s; real clean and dirty VCS metadata, Linux/amd64 and Darwin/arm64, actual validator CLI; zero archived execution", sha, before.Tree)
+}
+
+func TestTagRecheckTemporaryPlacement(t *testing.T) {
+	for _, child := range []bool{false, true} {
+		t.Run(map[bool]string{false: "source-root", true: "inside-source"}[child], func(t *testing.T) {
+			root := t.TempDir()
+			temp := root
+			if child {
+				temp = filepath.Join(root, "inside")
+				if e := os.Mkdir(temp, 0700); e != nil {
+					t.Fatal(e)
+				}
+			}
+			t.Setenv("TMPDIR", temp)
+			e := revalidateTagArchiveReport(root, strings.Repeat("1", 40), "inert", &archiveReport{}, nil)
+			if e == nil || !strings.Contains(e.Error(), "temporary directory must be outside source") {
+				t.Fatalf("source-local temporary placement accepted: %v", e)
+			}
+			entries, e := os.ReadDir(temp)
+			if e != nil || len(entries) != 0 {
+				t.Fatal("refused placement created source output")
+			}
+		})
+	}
 }

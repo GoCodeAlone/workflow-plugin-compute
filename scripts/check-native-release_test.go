@@ -6,6 +6,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -108,6 +109,102 @@ func TestNativeReleaseRelativeArtifact(t *testing.T) {
 	}
 	if _, e := checkNativeRelease(root, args, opt); e != nil || calls != 1 {
 		t.Fatalf("relative artifact policy failed: %v", e)
+	}
+}
+
+func TestNativeReleaseReceipt(t *testing.T) {
+	for _, name := range []string{"success", "child-failure", "cleanup-failure", "existing", "source-path", "snapshot", "cross"} {
+		t.Run(name, func(t *testing.T) {
+			root, args, opt := nativeFixture(t)
+			receiptRoot := t.TempDir()
+			if e := os.Chmod(receiptRoot, 0700); e != nil {
+				t.Fatal(e)
+			}
+			opt.receipt = filepath.Join(receiptRoot, "native.json")
+			called, cleaned := 0, false
+			opt.run = func(cmd *exec.Cmd) error {
+				called++
+				nativeEnvironment(t, cmd, root)
+				for _, e := range cmd.Env {
+					if strings.HasPrefix(e, "NATIVE_CHECK_RECEIPT=") {
+						t.Fatal("receipt destination leaked to plugin environment")
+					}
+				}
+				if _, e := os.Lstat(opt.receipt); !os.IsNotExist(e) {
+					t.Fatal("receipt exists before native check completes")
+				}
+				if name == "child-failure" {
+					return errors.New("inert verifier failure")
+				}
+				return nil
+			}
+			opt.cleanup = func(path string) error {
+				cleaned = true
+				if e := os.RemoveAll(path); e != nil {
+					return e
+				}
+				if name == "cleanup-failure" {
+					return errors.New("inert cleanup failure")
+				}
+				return nil
+			}
+			switch name {
+			case "existing":
+				if e := os.WriteFile(opt.receipt, []byte("preserve"), 0600); e != nil {
+					t.Fatal(e)
+				}
+			case "source-path":
+				opt.receipt = filepath.Join(root, "receipt.json")
+			case "snapshot":
+				args[3] = "true"
+			case "cross":
+				args[0], args[1] = "darwin", "arm64"
+			}
+			_, e := checkNativeRelease(root, args, opt)
+			if name == "success" {
+				if e != nil || called != 1 || !cleaned {
+					t.Fatalf("receipt producer failed: %v", e)
+				}
+				b, e := os.ReadFile(opt.receipt)
+				if e != nil {
+					t.Fatal(e)
+				}
+				var record nativeValidationReceipt
+				if e = json.Unmarshal(b, &record); e != nil {
+					t.Fatal(e)
+				}
+				a, _ := nativeDigest(filepath.Join(root, "dist/plugin"), 128<<20, true)
+				m, _ := nativeDigest(filepath.Join(root, "plugin.json"), 64<<10, false)
+				if record.Schema != 1 || record.Scope != "runtime-identity-version-declared-iac" || record.Verdict != "pass" || record.Target != "linux-amd64" || record.Artifact != "dist/plugin" || record.ArtifactSHA != a || record.ManifestSHA != m || record.VerifierSHA != opt.digest {
+					t.Fatal("receipt not bound to actual invocation inputs")
+				}
+				st, _ := os.Stat(opt.receipt)
+				if st.Mode().Perm() != 0600 {
+					t.Fatal("receipt mode not private")
+				}
+				return
+			}
+			if name == "snapshot" || name == "cross" {
+				if e != nil || called != 0 {
+					t.Fatal("skip created runtime evidence")
+				}
+			} else if e == nil {
+				t.Fatal("invalid receipt path/failure accepted")
+			}
+			if name == "child-failure" || name == "cleanup-failure" {
+				if called != 1 || !cleaned {
+					t.Fatal("failure control did not reach the actual invocation/cleanup boundary")
+				}
+			}
+			if name == "existing" {
+				b, _ := os.ReadFile(opt.receipt)
+				if string(b) != "preserve" || called != 0 {
+					t.Fatal("existing receipt overwritten or verifier started")
+				}
+			} else if _, e := os.Lstat(opt.receipt); !os.IsNotExist(e) {
+				t.Fatal("failure or skip emitted success receipt")
+			}
+		})
 	}
 }
 
