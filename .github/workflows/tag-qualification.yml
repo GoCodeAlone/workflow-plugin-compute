@@ -38,7 +38,7 @@ jobs:
           test "$(git rev-parse HEAD^2)" = "$PR_HEAD"
           test -z "$(git status --porcelain=v1 --untracked-files=all --ignored)"
           test "$(go version)" = 'go version go1.27.4 linux/amd64'
-          for file in .goreleaser.yaml scripts/check-build-toolchain.go go.mod go.sum scripts/check-release-archives.go scripts/check-release-archives_test.go scripts/check-native-release.go scripts/check-native-release_test.go scripts/qualify-tag-archives.go scripts/qualify-tag-archives_test.go scripts/install-release-engine.sh; do
+          for file in .goreleaser.yaml scripts/check-build-toolchain.go go.mod go.sum scripts/check-release-archives.go scripts/check-release-archives_test.go scripts/check-native-release.go scripts/check-native-release_test.go scripts/qualify-tag-archives.go scripts/qualify-tag-archives_test.go scripts/install-release-engine.sh scripts/acquire-release-engine.go scripts/acquire-release-engine_test.go; do
             test -f "$file" && test ! -L "$file"
           done
           sha256sum --check --strict <<'INPUTS'
@@ -47,12 +47,14 @@ jobs:
           de865e63ef12058b46d3e1bba849c80213ef2219bcd827b4b8fbdd6b7d363078  go.mod
           97f7baac3309f1b0889b30516fe3dcb581c0ba099130f7904e51d11963f534c4  go.sum
           4bab12314beb126e5733dcb147d54b2b11d90eba81aa1ccea4c2463f2e943fd3  scripts/check-release-archives.go
-          d5e31a5c4c9c9ecb5d3a440dffdef0b860ba58984f1c7b8d018b62abc858ce9d  scripts/check-release-archives_test.go
+          bee8daea12cb24c539a703178f7bab785a9c1e197f9e4633f959d53804033c7e  scripts/check-release-archives_test.go
           83c9c3f02e603e3ef0a9b3318a8be43d9e09483b943137e8169ca12551e3476f  scripts/check-native-release.go
           a942283a5cd2fad447507261aecfefe45fe9c7e97c75284e0664d18ba5edf472  scripts/check-native-release_test.go
           7b33ef466f782d6a39a4184e3dbaf45deff7e39a260866d0b216104314b2b28a  scripts/qualify-tag-archives.go
           681d29149bb646f18d40a581b7bdea01ae1ffd0fc45e80a19080aed659a37e39  scripts/qualify-tag-archives_test.go
           9c1ce84cca15098821f4597fcc7fda12a65bcaffce47e31636f43516f51af083  scripts/install-release-engine.sh
+          3b01467f6689213350af39ec8130eb9fd918531cd981bff4df5387197edd43f1  scripts/acquire-release-engine.go
+          29326b4c3aa34e344358787465ebab1a7b23d89b380378c1b981e5f902772a8f  scripts/acquire-release-engine_test.go
           INPUTS
           root="$(mktemp -d "$RUNNER_TEMP/tag-qualification.XXXXXXXX")"
           mkdir "$root/downloads" "$root/module-cache" "$root/build-cache" "$root/gopath" "$root/acquire-tmp"
@@ -66,12 +68,8 @@ jobs:
           umask 077
           home="$(mktemp -d "$OWNED_ROOT/download-home.XXXXXXXX")"
           env -i PATH=/usr/bin:/bin HOME="$home" curl --disable --fail --location --silent --show-error --proto '=https' --tlsv1.2 --max-time 120 --max-filesize 160000000 \
-            --output "$OWNED_ROOT/downloads/engine.tar.gz" \
-            https://github.com/goreleaser/goreleaser/releases/download/v2.20.3/goreleaser_Linux_x86_64.tar.gz
-          env -i PATH=/usr/bin:/bin HOME="$home" curl --disable --fail --location --silent --show-error --proto '=https' --tlsv1.2 --max-time 120 --max-filesize 160000000 \
             --output "$OWNED_ROOT/downloads/wfctl" \
             https://github.com/GoCodeAlone/workflow/releases/download/v0.78.2/wfctl-linux-amd64
-          printf '%s  %s\n' 'a36d5d7d07a5e538e052cef2a9f93f1cd4af493cf5a3712b9177c1ebe360f0e7' "$OWNED_ROOT/downloads/engine.tar.gz" | shasum -a 256 --check --strict
           printf '%s  %s\n' '0d41f3050b535e2bc7c1d6a5537ab2a60938e0b49c4c4f12ece1be883762dfc8' "$OWNED_ROOT/downloads/wfctl" | shasum -a 256 --check --strict
       - name: Acquire pinned dependencies
         env:
@@ -132,7 +130,7 @@ jobs:
         run: |
           umask 077
           test -f "$OWNED_ROOT/credentials-removed"
-          for file in .goreleaser.yaml scripts/check-build-toolchain.go go.mod go.sum scripts/check-release-archives.go scripts/check-release-archives_test.go scripts/check-native-release.go scripts/check-native-release_test.go scripts/qualify-tag-archives.go scripts/qualify-tag-archives_test.go scripts/install-release-engine.sh; do
+          for file in .goreleaser.yaml scripts/check-build-toolchain.go go.mod go.sum scripts/check-release-archives.go scripts/check-release-archives_test.go scripts/check-native-release.go scripts/check-native-release_test.go scripts/qualify-tag-archives.go scripts/qualify-tag-archives_test.go scripts/install-release-engine.sh scripts/acquire-release-engine.go scripts/acquire-release-engine_test.go; do
             test -f "$file" && test ! -L "$file"
           done
           sha256sum --check --strict <<'INPUTS'
@@ -141,17 +139,17 @@ jobs:
           de865e63ef12058b46d3e1bba849c80213ef2219bcd827b4b8fbdd6b7d363078  go.mod
           97f7baac3309f1b0889b30516fe3dcb581c0ba099130f7904e51d11963f534c4  go.sum
           4bab12314beb126e5733dcb147d54b2b11d90eba81aa1ccea4c2463f2e943fd3  scripts/check-release-archives.go
-          d5e31a5c4c9c9ecb5d3a440dffdef0b860ba58984f1c7b8d018b62abc858ce9d  scripts/check-release-archives_test.go
+          bee8daea12cb24c539a703178f7bab785a9c1e197f9e4633f959d53804033c7e  scripts/check-release-archives_test.go
           83c9c3f02e603e3ef0a9b3318a8be43d9e09483b943137e8169ca12551e3476f  scripts/check-native-release.go
           a942283a5cd2fad447507261aecfefe45fe9c7e97c75284e0664d18ba5edf472  scripts/check-native-release_test.go
           7b33ef466f782d6a39a4184e3dbaf45deff7e39a260866d0b216104314b2b28a  scripts/qualify-tag-archives.go
           681d29149bb646f18d40a581b7bdea01ae1ffd0fc45e80a19080aed659a37e39  scripts/qualify-tag-archives_test.go
           9c1ce84cca15098821f4597fcc7fda12a65bcaffce47e31636f43516f51af083  scripts/install-release-engine.sh
+          3b01467f6689213350af39ec8130eb9fd918531cd981bff4df5387197edd43f1  scripts/acquire-release-engine.go
+          29326b4c3aa34e344358787465ebab1a7b23d89b380378c1b981e5f902772a8f  scripts/acquire-release-engine_test.go
           INPUTS
           mkdir "$OWNED_ROOT/execution-home" "$OWNED_ROOT/execution-tmp"
           # Repository helpers run only after auth material/logs are removed.
-          env -i PATH=/usr/bin:/bin HOME="$OWNED_ROOT/execution-home" TMPDIR="$OWNED_ROOT/execution-tmp" \
-            bash ./scripts/install-release-engine.sh linux-amd64 "$OWNED_ROOT/downloads/engine.tar.gz" "$OWNED_ROOT/engine"
           printf '%s  %s\n' '0d41f3050b535e2bc7c1d6a5537ab2a60938e0b49c4c4f12ece1be883762dfc8' "$OWNED_ROOT/downloads/wfctl" | shasum -a 256 --check --strict
           chmod 500 "$OWNED_ROOT/downloads/wfctl"
           go_bin="$(command -v go)"
@@ -162,11 +160,15 @@ jobs:
               GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0 GIT_ALLOW_PROTOCOL=file GIT_NO_LAZY_FETCH=1 \
               GOPATH="$OWNED_ROOT/gopath" GOMODCACHE="$OWNED_ROOT/module-cache" GOCACHE="$OWNED_ROOT/build-cache" "$@"
           }
+          (cd scripts && clean "$go_bin" test -count=1 -timeout=60s acquire-release-engine.go acquire-release-engine_test.go)
+          # Shared with production: fixed public acquisition, strict archive
+          # extraction and binary authentication; never executes the engine.
+          engine_bin="$(clean "$go_bin" run ./scripts/acquire-release-engine.go "$GITHUB_WORKSPACE" "$OWNED_ROOT")"
           (cd scripts && clean "$go_bin" test -count=1 -timeout=45s check-release-archives.go check-release-archives_test.go)
           (cd scripts && clean "$go_bin" test -count=1 -timeout=45s check-native-release.go check-native-release_test.go)
           (cd scripts && clean "$go_bin" test -count=1 -timeout=45s qualify-tag-archives.go qualify-tag-archives_test.go)
           # Only this fixed driver may invoke the engine in this job. Successful
           # stdout contains its validated public combined receipt, not raw logs.
           clean "$go_bin" run ./scripts/qualify-tag-archives.go "$EXPECTED_SHA" "$EXPECTED_TREE" "$OWNED_ROOT" "$GITHUB_WORKSPACE" \
-            "$OWNED_ROOT/engine/goreleaser" "$OWNED_ROOT/downloads/wfctl" "$go_bin"
+            "$engine_bin" "$OWNED_ROOT/downloads/wfctl" "$go_bin"
           test "$(du -sk "$OWNED_ROOT" | cut -f1)" -lt 4194304
